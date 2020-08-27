@@ -1,0 +1,12 @@
+Short:        Software based FPU emulator
+Author:       jari.eskelinen@iki.fi (Jari Eskelinen), flype, tuko, gvb, henrik
+Uploader:     jari.eskelinen@iki.fi (Jari Eskelinen)
+Type:         util/misc
+Version:      0.10
+Architecture: m68k-amigaos >= 3.1
+Distribution: Aminet
+
+Femu is a software based fpu emulator for Amiga's without a real FPU. 
+Please be aware that software emulation is always much slower than real 
+deal nor is compatibility perfect. YMMV, no guarantees, be happy if 
+something actually works.
