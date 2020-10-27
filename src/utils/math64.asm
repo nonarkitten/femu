@@ -1,4 +1,36 @@
 ;
+; Converts double into 'fake' 64-bit integer
+;
+; INPUTS
+;	\1 -- High bits.
+;	\2 -- Low bits.
+;
+; RESULT
+;	\1 -- High bits.
+;	\2 -- Low bits.
+;
+FAKE64 macro
+	btst			#31,\1
+	beq.s			.\@Ok
+	eor.l			#$7FFFFFFF,\1
+	eor.l			#$FFFFFFFF,\2
+	.\@Ok:
+endm
+
+;
+; Checks if value is INF or NAN
+;
+; INPUTS
+;	\1 -- High bits
+;   \2 -- Branch if INF or NAN
+ISNAN macro
+	cmp.l			#$7FEFFFFF,\1
+	bgt.s			\2
+	cmp.l			#$FFF00000,\1
+	bls.s			\2
+endm
+
+;
 ; Performs 64 bit add.
 ; 
 ; INPUTS
