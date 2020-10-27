@@ -1,5 +1,9 @@
-FABSHANDLER macro
-
+;
+; fabs emulation
+;
+FabsHandler
+FsabsHandler
+FdabsHandler
 	; Debug instruction
 	WRITEDEBUG		#.DEBUGOP,INSTRUCTION
 
@@ -8,12 +12,7 @@ FABSHANDLER macro
 	
 	; Get data
 	GETDATALENGTH	d0
-    ifnb \1
-        MOVEFROMC       010,1
-        vperm           #$01230123,d1,d1,d0
-	else
-		GETEAVALUE		d0,d1
-	endif
+	GETEAVALUE		d0,d1
 	
 	; Emulate instruction
 	bclr			#31,d0
@@ -25,17 +24,10 @@ FABSHANDLER macro
 	; Set condition codes
 	SETCC			d0,d1
 	
-endm
-
-
-;
-;
-;
-FabsHandler
-FsabsHandler
-FdabsHandler
-	FABSHANDLER
+	; Done
 	rts
+
+	; Debug constants
 	.DEBUGOP:
 	dc.b 			"fabs %08lx",10,0
 	even
