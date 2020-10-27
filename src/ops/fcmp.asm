@@ -2,7 +2,6 @@
 ; fcmp emulation
 ;
 FcmpHandler
-
 	; Debug instruction
 	WRITEDEBUG		#.DEBUGOP,INSTRUCTION
 
@@ -16,14 +15,25 @@ FcmpHandler
 	MOVEFPNTODN		d5,d0,d1
 	
 	; Emulate instruction
-	movea.l			MathIeeeDoubBasBase,a6
-	jsr				_LVOIEEEDPSub(a6)
-	
+	; is d0 nan or infinite, then pass
+	ISNAN			d0, .Done
+	ISNAN			d2, .Swap
+	FAKE64			d0,d1
+	FAKE64			d2,d3
+	SUB64			d0,d1, d2,d3
+	FAKE64			d0,d1
+.Done:
+	; Write results		
 	; Set condition codes
 	SETCC			d0,d1
 	
 	; Done
 	rts
+	
+.Swap
+	move.l			d2,d0
+	move.l			d3,d1
+	bra				.Done
 	
 	; Debug constants
 	.DEBUGOP:
