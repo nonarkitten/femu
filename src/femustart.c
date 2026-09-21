@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <exec/execbase.h>
 #include <dos/dos.h>
 #include <proto/exec.h>

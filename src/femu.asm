@@ -86,6 +86,7 @@
 	MathIeeeDoubTransBase:	dc.l	0
 	AttnFlags:				dc.w	0
 	ExceptionVector:		dc.l	0
+	OriginalPCR8:			dc.l	0
 
 	
 ;
@@ -211,7 +212,7 @@ FemuExit
 	CLOSELIB	DOSBase
 		
 	; Restore AttnFlags
-	tst.l		AttnFlags
+	tst.w		AttnFlags
 	beq.s		.AttnFlagsOk
 	movea.l		_AbsExecBase,a6
 	move.w		AttnFlags,_LVOAttnFlags(a6)
@@ -222,9 +223,7 @@ FemuExit
 
 
 ;
-; Initializes 080 
-;
-; TODO: store original values and restore them on exit
+; Initializes 080
 ;
 Init080
 
@@ -244,9 +243,10 @@ Init080
 	rts
 	
 	.Init080Super:
-	
-		; Disable DFP
+
+		; Save and disable DFP
 		MOVEFROMC	08,08
+		move.l		d0,OriginalPCR8
 		bclr		#1,d0
 		MOVETOC		08,08
 		rte
@@ -269,10 +269,9 @@ Exit080
 	rts
 	
 	.Exit080Super:
-	
-		; Enable DFP
-		MOVEFROMC	08,08
-		bset		#1,d0
+
+		; Restore original PCR8
+		move.l		OriginalPCR8,d0
 		MOVETOC		08,08
 		rte
 	
@@ -324,4 +323,4 @@ Initialize080FpuVectors
 ; TODO: Use stack for this too?
 ;
 			cnop	64,4
-TempEa		dc.l	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+TempEa		dc.l	0,0,0,0	; 16 bytes: max single EA data length is 12 (extended/packed, FMTLENGTHS)
