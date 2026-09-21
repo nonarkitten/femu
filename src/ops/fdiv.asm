@@ -14,6 +14,28 @@ FE_FDIV macro
 	bfextu			d0{1:11},d4
 	bfextu			d2{1:11},d5
 
+	; Fast path: both operands "ordinary" (finite, nonzero, not a
+	; denormal -- exponent in [1,2046])? If so, skip straight past the
+	; Inf/NaN/zero ladder below -- see FE_FADD for why this range check
+	; is an exact precondition for "the ladder wouldn't have done
+	; anything anyway". d6 is free here, before the sign computation
+	; both paths do next, so nothing needs restoring.
+	move.w			d4,d6
+	subq.w			#1,d6
+	cmp.w			#2046,d6
+	bhs.s			.SpecialCase
+	move.w			d5,d6
+	subq.w			#1,d6
+	cmp.w			#2046,d6
+	bhs.s			.SpecialCase
+
+	; Ordinary: compute the sign and go straight to the real divide.
+	move.l			d0,d6
+	eor.l			d2,d6
+	and.l			#$80000000,d6
+	bra.w			.MainBody
+
+	.SpecialCase:
 	; Result sign = XOR of the operand signs (see FE_FMUL for why this
 	; is simpler than FE_FADD's {0:1}-packed convention)
 	move.l			d0,d6
@@ -21,7 +43,8 @@ FE_FDIV macro
 	and.l			#$80000000,d6
 
 	; Infinities/NaNs: passed through as-is, matching FE_FADD/FE_FMUL's
-	; pragmatic style -- true special-case handling is checklist #3
+	; pragmatic style -- true special-case handling beyond this fast
+	; path stays out of scope here too
 	cmp.w			#$7ff,d4
 	bne.s			.DstExpOk
 	bra.w			.Done
@@ -51,6 +74,7 @@ FE_FDIV macro
 	bra.w			.Done
 	.SrcExpNoZ:
 
+	.MainBody:
 	; Combined (biased) exponent, before any renormalization below
 	sub.w			d5,d4
 	add.w			#1023,d4

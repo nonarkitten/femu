@@ -90,10 +90,12 @@ measurable, not the full design in `../BENCHMARK.md`. Specifically:
 - **No single-precision (`fs*`) or extended-precision (`fd*` in the
   40-bit-mantissa sense) variant vectors** — only the plain (double)
   opcode forms in `vectors/ops.txt`.
-- **No NaN/Inf/denormal/zero-operand vectors yet.** These are exactly
-  the cases the "relaxed IEEE" checklist row (`#3`) cares about, so
-  they matter a lot for that branch specifically — add them before
-  starting it.
+- **Some Inf/zero-operand vectors exist** (`fadd`/`fmul`/`fdiv` x
+  {Inf, 0.0} in a few combinations, added for checklist row `#3`), but
+  **no NaN and no denormal vectors** — worth adding if a future row
+  actually implements denormal arithmetic (today's denormal-as-zero
+  behavior, unchanged since before `#3`, is a known limitation, not
+  something these vectors exercise).
 - **`vectors/ops.txt` and `src/ops.asm` are hand-kept in lockstep**
   (same row order, one line per row) rather than generated from each
   other. The harness refuses to run if their counts disagree.
