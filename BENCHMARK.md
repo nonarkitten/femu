@@ -102,9 +102,8 @@ and the specific caveats of what's there today.
   `harness.c` refuses to run if the two files' row counts disagree.
 - **Not yet covered** (see `bench/README.md`'s "current coverage" section
   for the full list): non-register-direct addressing modes, single- and
-  extended-precision variants, and NaN/Inf/denormal/zero operands. That
-  last group matters a lot for checklist row `#3` (relaxed IEEE) — add
-  vectors for it before starting that branch.
+  extended-precision variants, and NaN/denormal operands (some Inf/zero
+  vectors were added for checklist row `#3`).
 - `src/ftest.asm` itself still has a real bug worth fixing independently
   of this harness: `FtestInit`/`FtestMathBase`/`FtestMathTrans`/
   `FtestCompare`/`FtestExit` are called after an unconditional `rts`, so

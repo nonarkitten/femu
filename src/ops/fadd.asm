@@ -14,12 +14,36 @@ FE_FADD macro
     bfextu			d0{1:11},d4
     bfextu			d2{1:11},d5
 
+	; Fast path: both operands "ordinary" (finite, nonzero, not a
+	; denormal -- i.e. exponent in [1,2046])? If so, skip straight past
+	; the whole Inf/NaN/zero ladder below -- it only ever special-cases
+	; an operand whose exponent is 0 or $7ff, so this range check is an
+	; exact, cheap precondition for "the ladder wouldn't have done
+	; anything anyway". d6 is free here (not needed again until the
+	; sign extraction both paths do next), so no register to restore.
+	move.w			d4,d6
+	subq.w			#1,d6
+	cmp.w			#2046,d6
+	bhs.s			.SpecialCase
+	move.w			d5,d6
+	subq.w			#1,d6
+	cmp.w			#2046,d6
+	bhs.s			.SpecialCase
+
+	; Ordinary: extract signs and go straight to the real add.
+	bfextu			d0{0:1},d6
+	bfins			d6,d4{0:1}
+	bfextu			d2{0:1},d6
+	bfins			d6,d5{0:1}
+	bra.w			.MainBody
+
+	.SpecialCase:
     ; Extract signs
     bfextu          d0{0:1},d6
     bfins           d6,d4{0:1}
     bfextu          d2{0:1},d6
     bfins           d6,d5{0:1}
-	
+
 	; Check exponent for infinities and NaNs
 	cmp.w 			#$7ff,d4
 	bne.s			.DstExpOk
@@ -31,7 +55,7 @@ FE_FADD macro
 	move.l			d3,d1
 	bra.w			.Done
 	.SrcExpOk:
-	
+
 	; Check exponent for zeroes
 	tst.w			d4
 	bne.s			.DstExpNoZ
@@ -42,12 +66,13 @@ FE_FADD macro
 	tst.w			d5
 	beq.w			.Done
 
+	.MainBody:
 	; Extract fractions
 	bfextu			d0{12:20},d0
     bfextu			d2{12:20},d2
 	bset			#20,d0
 	bset			#20,d2
-	
+
 	; Align exponents
 	ALIGNEXPONENT	d4,d0,d1,d5,d2,d3
 	
@@ -100,12 +125,7 @@ FADDHANDLER macro
 	MOVEFPNTODN		d5,d0,d1
 	
 	; Emulate instruction
-	ifd NOMATHLIB
-		FE_FADD
-	else
-		movea.l			MathIeeeDoubBasBase,a6
-		jsr				_LVOIEEEDPAdd(a6)
-	endif
+	FE_FADD
 
 	; Write results
 	GETREGISTER		d5

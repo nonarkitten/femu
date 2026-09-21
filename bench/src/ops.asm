@@ -28,6 +28,15 @@
 	fdiv.x		fp1,fp0
 	fdiv.x		fp1,fp0
 	fdiv.x		fp1,fp0
+	fadd.x		fp1,fp0
+	fadd.x		fp1,fp0
+	fadd.x		fp1,fp0
+	fadd.x		fp1,fp0
+	fmul.x		fp1,fp0
+	fmul.x		fp1,fp0
+	fdiv.x		fp1,fp0
+	fdiv.x		fp1,fp0
+	fdiv.x		fp1,fp0
 	fabs.x		fp0,fp0
 	fneg.x		fp0,fp0
 	fint.x		fp0,fp0

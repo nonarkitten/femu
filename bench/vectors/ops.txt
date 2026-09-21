@@ -30,6 +30,15 @@ fdiv     1.0      3.0
 fdiv     -4.0     2.0
 fdiv     100.0    4.0
 fdiv     7.0      7.0
+fadd     inf      1.0
+fadd     1.0      inf
+fadd     0.0      5.5
+fadd     5.5      0.0
+fmul     inf      2.0
+fmul     0.0      5.0
+fdiv     5.0      0.0
+fdiv     0.0      5.0
+fdiv     inf      2.0
 fabs     -5.5     -
 fneg     12.1     -
 fint     2.9      -

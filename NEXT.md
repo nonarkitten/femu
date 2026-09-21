@@ -23,15 +23,25 @@ next.
 
 ## Current state
 
-`#0` (the `bench/` harness) and `#1` (native `MUL64`/`DIV64`, real
-`FE_FMUL`/`FE_FDIV`) are both ✅. Next up: `#2` (make `NOMATHLIB` the
-default) and `#3` (relaxed IEEE) both depend only on `#1` and are
-unblocked — pick either. `#4` (native extended-precision internal
-representation) and `#9`/`#10` (transcendental fast paths / native
-transcendentals) also depend on `#1` and are fair game.
+`#0`-`#3` are all ✅ (bench harness; native `MUL64`/`DIV64` + real
+`FE_FMUL`/`FE_FDIV`; `NOMATHLIB` made the default for `fadd`/`fsub`/
+`fmul`/`fdiv`; the Inf/NaN/zero fast path). Everything depending only on
+`#1` is unblocked: `#4` (native extended-precision internal
+representation), `#5` (single-precision fast path), `#9`/`#10`
+(transcendental fast paths / native transcendentals).
 
-Two things worth knowing before touching `fdiv` again: its `NOMATHLIB`
-cost (~4400-4700 cycles) is dominated by a 54-iteration one-bit-at-a-time
+Two things worth knowing before touching `fdiv` again: its cost
+(~4400-4700 cycles) is dominated by a 54-iteration one-bit-at-a-time
 division loop — deliberately the simple-and-correct version, not the
 fast one (see `#1`'s row in `README.md`). A hardware-`divu.l`-seeded
 division algorithm is a good candidate for its own future checklist row.
+
+**Before assuming something's a bug: check for concurrent work.** More
+than once, a checklist row turned out to already be done on a pushed
+`perf/*` branch (or even already merged to `master`) by a different,
+concurrent session -- what looked like a regression (an `ifd NOMATHLIB`
+guard missing from an op file) was actually another session correctly
+finishing `#2`. Before "fixing" something that looks wrong in a file a
+checklist row doesn't mention touching, run `git log --oneline --all`
+and `git ls-remote --heads origin` to check whether a sibling branch or
+a newer `master` already explains it.
