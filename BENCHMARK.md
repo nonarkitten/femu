@@ -1,3 +1,53 @@
+# Measuring a speedup
+
+femu only really runs on Amiga hardware, WinUAE, or FS-UAE — none of which
+give you a scriptable, CI-friendly cycle count, and none of which are
+available in a typical dev sandbox (no m68k toolchain, no Kickstart ROM).
+So instead of "run it on a real Amiga and eyeball it", we measure with a
+**headless 68K CPU emulator embedded in a small host-side C harness**. This
+gives exact retro cycle counts, builds with a stock host `gcc`, and produces
+a diffable number for every checklist row in `README.md`.
+
+This is implemented — checklist item `#0` — as `bench/`. This doc is the
+design and the reasoning; `bench/README.md` is the build/run instructions
+and the specific caveats of what's there today.
+
+## Why this approach and not WinUAE/FS-UAE
+
+- WinUAE/FS-UAE need a Kickstart ROM (copyrighted, not redistributable) and
+  a full AmigaOS boot just to open `dos.library` and friends — massive
+  overhead for what is, at its core, a question about how many cycles
+  `HandleException` burns on one opcode.
+- femu's exception handler doesn't need AmigaOS at all to run: it installs
+  itself at vector 11 (`$2c`, "Line 1111 Emulator") and does its work with
+  plain register/memory access. A bare CPU core with a synthetic vector
+  table is sufficient to execute it.
+- A pure-C, no-ROM 68K core builds anywhere (this sandbox included) and can
+  run thousands of opcode trials in milliseconds — good enough to make "run
+  the benchmark" a normal step in every branch, not a special occasion that
+  requires a human with real hardware.
+
+## The harness (`bench/`)
+
+1. **Core**: [Musashi](https://github.com/kstenerud/Musashi) — a portable,
+   MIT-licensed, cycle-counting 68000/68010/68020/68030/68040 emulator core
+   in plain C. No ROM, no OS, just an address space and a CPU. Vendored as
+   a git submodule at `bench/vendor/musashi`.
+2. **Assembler**: `vasmm68k_mot` — the same assembler femu's own `Makefile`
+   uses — vendored as a git submodule at `bench/vendor/vasm` (an unofficial
+   mirror; vasm's own distribution is a tarball, not git, and its license
+   explicitly permits unmodified redistribution for M68k/AmigaOS targets,
+   which is exactly this project). `bench/Makefile` uses a system-installed
+   `vasmm68k_mot` instead when one is already on `PATH`.
+3. **Memory image, no `vlink` needed**: femu.asm is a single compilation
+   unit — `femu.asm` itself `include`s every file under `src/ops/` and
+   `src/utils/` directly, so there's no cross-object linking to do. That
+   means `vasmm68k_mot -Fbin` (flat binary output, no Amiga hunk headers,
+   no relocations) is enough on its own; `vlink`'s job in the real
+   `Makefile` is just wrapping a single already-complete hunk for the OS
+   loader, which we don't need. `bench/src/bench_wrapper.asm` assembles
+   `femu.asm` completely unmodified, preceded only by a few `dc.l`s of its
+   own that resolve (at assemble time, same as everything else) to the
    handful of label addresses the harness needs — see the comment at the
    top of that file. Because the flat binary is loaded at address 0 in the
    harness's memory image, which is the same base `vasm` assumed when
