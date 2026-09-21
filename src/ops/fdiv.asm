@@ -199,12 +199,7 @@ FDIVHANDLER macro
 	MOVEFPNTODN		d5,d0,d1
 
 	; Emulate instruction
-	ifd NOMATHLIB
-		FE_FDIV
-	else
-		movea.l		MathIeeeDoubBasBase,a6
-		jsr			_LVOIEEEDPDiv(a6)
-	endif
+	FE_FDIV
 
 	; Write results
 	GETREGISTER		d5

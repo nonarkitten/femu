@@ -21,13 +21,8 @@ FSUBHANDLER macro
 	MOVEFPNTODN		d5,d0,d1
 	
 	; Emulate instruction
-	ifd NOMATHLIB
-		bchg			#31,d2
-		FE_FADD
-	else
-		movea.l			MathIeeeDoubBasBase,a6
-		jsr				_LVOIEEEDPSub(a6)
-	endif
+	bchg			#31,d2
+	FE_FADD
 
 	; Write results
 	GETREGISTER		d5
