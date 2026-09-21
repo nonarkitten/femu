@@ -10,7 +10,7 @@
 | fcos | calls MathIeeeDoubTrans |
 | fcosh | calls MathIeeeDoubTrans |
 | fdbcc | optimal |
-| fdiv | calls MathIeeeDoubBas *** |
+| fdiv | set NOMATHLIB for native (slow, correct) 54-iteration division |
 | fetox | calls MathIeeeDoubTrans |
 | fgetexp | may have issues |
 | fgetman | doe not work at all |
@@ -23,7 +23,7 @@
 | fmovecr | optimal |
 | fmovefpcr | optimal |
 | fmovem | optimal |
-| fmul | NOMATHLIB has been commented out? needs work |
+| fmul | set NOMATHLIB for native, hardware-mulu.l-based, correctly-rounded code |
 | fneg | optimal |
 | frestore | optimal |
 | fsave | optimal |

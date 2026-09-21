@@ -305,25 +305,27 @@ int main(int argc, char **argv)
 {
 	const char *variant_paths[2] = { "build/femu020.bin", "build/femu020m.bin" };
 	const char *variant_names[2] = { "femu.020 (library)", "femu.020m (NOMATHLIB)" };
-	unsigned char ops[24 * 4];
+	unsigned char ops[64 * 4];
 	struct vector vecs[64];
 	int nvec, vi, variant;
+	size_t ops_size;
 	FILE *opsf;
 
 	(void)argc; (void)argv;
 
 	opsf = fopen("build/ops.bin", "rb");
 	if (!opsf) { fprintf(stderr, "bench: build/ops.bin missing -- run make first\n"); return 1; }
-	if (fread(ops, 1, sizeof ops, opsf) != sizeof ops) {
-		fprintf(stderr, "bench: build/ops.bin has the wrong size (expected %zu bytes)\n", sizeof ops);
+	ops_size = fread(ops, 1, sizeof ops, opsf);
+	if (ops_size == 0 || (ops_size % 4) != 0) {
+		fprintf(stderr, "bench: build/ops.bin has an unexpected size (%zu bytes, not a multiple of 4)\n", ops_size);
 		return 1;
 	}
 	fclose(opsf);
 
 	nvec = load_vectors("vectors/ops.txt", vecs, 64);
-	if (nvec != (int)(sizeof ops / 4)) {
+	if (nvec != (int)(ops_size / 4)) {
 		fprintf(stderr, "bench: vectors/ops.txt has %d rows but src/ops.asm has %zu -- "
-		                "the two files must be kept in lockstep\n", nvec, sizeof ops / 4);
+		                "the two files must be kept in lockstep\n", nvec, ops_size / 4);
 		return 1;
 	}
 
@@ -344,7 +346,7 @@ int main(int argc, char **argv)
 		parse_image_header(&img);
 		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
 		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
-		memcpy(mem + TEST_CODE, ops, sizeof ops);
+		memcpy(mem + TEST_CODE, ops, ops_size);
 
 		printf("\n=== %s ===\n", variant_names[variant]);
 		printf("%-10s %14s %10s  %s\n", "op", "cycles", "match", "note");

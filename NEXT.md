@@ -23,6 +23,15 @@ next.
 
 ## Current state
 
-Checklist item `#0` (the `bench/` harness itself) hasn't been built yet —
-nothing downstream of it can be *measured* yet, only implemented. If `#0`
-isn't ✅, do that first regardless of what else looks tempting.
+`#0` (the `bench/` harness) and `#1` (native `MUL64`/`DIV64`, real
+`FE_FMUL`/`FE_FDIV`) are both ✅. Next up: `#2` (make `NOMATHLIB` the
+default) and `#3` (relaxed IEEE) both depend only on `#1` and are
+unblocked — pick either. `#4` (native extended-precision internal
+representation) and `#9`/`#10` (transcendental fast paths / native
+transcendentals) also depend on `#1` and are fair game.
+
+Two things worth knowing before touching `fdiv` again: its `NOMATHLIB`
+cost (~4400-4700 cycles) is dominated by a 54-iteration one-bit-at-a-time
+division loop — deliberately the simple-and-correct version, not the
+fast one (see `#1`'s row in `README.md`). A hardware-`divu.l`-seeded
+division algorithm is a good candidate for its own future checklist row.
