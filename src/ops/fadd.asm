@@ -100,8 +100,13 @@ FADDHANDLER macro
 	MOVEFPNTODN		d5,d0,d1
 	
 	; Emulate instruction
-	FE_FADD
-	
+	ifd NOMATHLIB
+		FE_FADD
+	else
+		movea.l			MathIeeeDoubBasBase,a6
+		jsr				_LVOIEEEDPAdd(a6)
+	endif
+
 	; Write results
 	GETREGISTER		d5
 	MOVEDNTOFPN		d5,d0,d1
