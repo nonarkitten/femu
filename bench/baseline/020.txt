@@ -1,20 +1,20 @@
 
 === femu.020 (library) ===
 op                 cycles      match  note
-fadd                  642      MATCH  3.3000000000000003 vs 3.3000000000000003 (stub)
-fsub                  642      MATCH  69.899999999999991 vs 69.899999999999991 (stub)
-fmul                  642      MATCH  27.224999999999998 vs 27.224999999999998 (stub)
-fmul                  642      MATCH  -7 vs -7 (stub)
-fmul                  642      MATCH  3.6099999999999999 vs 3.6099999999999999 (stub)
-fmul                  642      MATCH  -123.456789 vs -123.456789 (stub)
-fmul                  642      MATCH  99.999999979999998 vs 99.999999979999998 (stub)
-fdiv                  642      MATCH  10.1 vs 10.1 (stub)
-fdiv                  642      MATCH  0.5 vs 0.5 (stub)
-fdiv                  642      MATCH  3.3333333330000001 vs 3.3333333330000001 (stub)
-fdiv                  642      MATCH  0.33333333333333331 vs 0.33333333333333331 (stub)
-fdiv                  642      MATCH  -2 vs -2 (stub)
-fdiv                  642      MATCH  25 vs 25 (stub)
-fdiv                  642      MATCH  1 vs 1 (stub)
+fadd                  914      MATCH  3.3000000000000003 vs 3.3000000000000003
+fsub                  912      MATCH  69.899999999999991 vs 69.899999999999991
+fmul                 1143      MATCH  27.224999999999998 vs 27.224999999999998
+fmul                 1143      MATCH  -7 vs -7
+fmul                 1177      MATCH  3.6099999999999999 vs 3.6099999999999999
+fmul                 1143      MATCH  -123.456789 vs -123.456789
+fmul                 1143      MATCH  99.999999979999998 vs 99.999999979999998
+fdiv                 4429      MATCH  10.1 vs 10.1
+fdiv                 4679      MATCH  0.5 vs 0.5
+fdiv                 4427      MATCH  3.3333333330000001 vs 3.3333333330000001
+fdiv                 4415      MATCH  0.33333333333333331 vs 0.33333333333333331
+fdiv                 4679      MATCH  -2 vs -2
+fdiv                 4659      MATCH  25 vs 25
+fdiv                 4679      MATCH  1 vs 1
 fabs                  588      MATCH  5.5 vs 5.5
 fneg                  596      MATCH  -12.1 vs -12.1
 fint                  617      MATCH  3 vs 3 (stub)

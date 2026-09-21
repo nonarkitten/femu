@@ -157,12 +157,7 @@ FMULHANDLER macro
 	MOVEFPNTODN		d5,d0,d1
 
 	; Emulate instruction
-	ifd NOMATHLIB
-		FE_FMUL
-	else
-		movea.l			MathIeeeDoubBasBase,a6
-		jsr				_LVOIEEEDPMul(a6)
-	endif
+	FE_FMUL
 
 	; Write results
 	GETREGISTER		d5
