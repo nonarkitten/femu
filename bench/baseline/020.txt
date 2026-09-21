@@ -1,0 +1,54 @@
+
+=== femu.020 (library) ===
+op                 cycles      match  note
+fadd                  642      MATCH  3.3000000000000003 vs 3.3000000000000003 (stub)
+fsub                  642      MATCH  69.899999999999991 vs 69.899999999999991 (stub)
+fmul                  634      MATCH  27.224999999999998 vs 27.224999999999998 (stub)
+fdiv                  634      MATCH  10.1 vs 10.1 (stub)
+fabs                  588      MATCH  5.5 vs 5.5
+fneg                  596      MATCH  -12.1 vs -12.1
+fint                  617      MATCH  3 vs 3 (stub)
+fintrz                614      MATCH  2 vs 2 (stub)
+fsqrt                 600      MATCH  2.0615528128088303 vs 2.0615528128088303 (stub)
+facos                 600      MATCH  0.76699400786186667 vs 0.76699400786186667 (stub)
+fasin                 600      MATCH  0.78949820934617188 vs 0.78949820934617188 (stub)
+fatan                 600      MATCH  1.1525719972156676 vs 1.1525719972156676 (stub)
+fcos                  600      MATCH  0.7316888688738209 vs 0.7316888688738209 (stub)
+fcosh                 600      MATCH  6228.2634059438069 vs 6228.2634059438069 (stub)
+fetox                 600      MATCH  38.861342871332468 vs 38.861342871332468 (stub)
+ftentox               612      MATCH  131825.67385564075 vs 131825.67385564075 (stub)
+ftwotox               612      MATCH  5792.6187514801977 vs 5792.6187514801977 (stub)
+flog2                 628     DIFFER  2.8579809951275719 vs 2.8579809951275723 (stub)
+flog10                600      MATCH  0.86033800657099369 vs 0.86033800657099369 (stub)
+flogn                 600      MATCH  1.9810014688665833 vs 1.9810014688665833 (stub)
+fsin                  600      MATCH  0.24740395925452294 vs 0.24740395925452294 (stub)
+fsinh                 600      MATCH  2770.6931066087172 vs 2770.6931066087172 (stub)
+ftan                  600      MATCH  0.96658293352388214 vs 0.96658293352388214 (stub)
+ftanh                 600      MATCH  0.99999013835680184 vs 0.99999013835680184 (stub)
+
+=== femu.020m (NOMATHLIB) ===
+op                 cycles      match  note
+fadd                  896      MATCH  3.3000000000000003 vs 3.3000000000000003
+fsub                  894      MATCH  69.899999999999991 vs 69.899999999999991
+fmul                  634      MATCH  27.224999999999998 vs 27.224999999999998 (stub)
+fdiv                  634      MATCH  10.1 vs 10.1 (stub)
+fabs                  588      MATCH  5.5 vs 5.5
+fneg                  596      MATCH  -12.1 vs -12.1
+fint                  834      MATCH  3 vs 3
+fintrz                676      MATCH  2 vs 2
+fsqrt                 600      MATCH  2.0615528128088303 vs 2.0615528128088303 (stub)
+facos                 600      MATCH  0.76699400786186667 vs 0.76699400786186667 (stub)
+fasin                 600      MATCH  0.78949820934617188 vs 0.78949820934617188 (stub)
+fatan                 600      MATCH  1.1525719972156676 vs 1.1525719972156676 (stub)
+fcos                  600      MATCH  0.7316888688738209 vs 0.7316888688738209 (stub)
+fcosh                 600      MATCH  6228.2634059438069 vs 6228.2634059438069 (stub)
+fetox                 600      MATCH  38.861342871332468 vs 38.861342871332468 (stub)
+ftentox               612      MATCH  131825.67385564075 vs 131825.67385564075 (stub)
+ftwotox               612      MATCH  5792.6187514801977 vs 5792.6187514801977 (stub)
+flog2                 628     DIFFER  2.8579809951275719 vs 2.8579809951275723 (stub)
+flog10                600      MATCH  0.86033800657099369 vs 0.86033800657099369 (stub)
+flogn                 600      MATCH  1.9810014688665833 vs 1.9810014688665833 (stub)
+fsin                  600      MATCH  0.24740395925452294 vs 0.24740395925452294 (stub)
+fsinh                 600      MATCH  2770.6931066087172 vs 2770.6931066087172 (stub)
+ftan                  600      MATCH  0.96658293352388214 vs 0.96658293352388214 (stub)
+ftanh                 600      MATCH  0.99999013835680184 vs 0.99999013835680184 (stub)

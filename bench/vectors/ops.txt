@@ -1,0 +1,42 @@
+# Golden test vectors for the bench harness.
+#
+# One row per opcode, in the SAME ORDER as bench/src/ops.asm (the two
+# files are hand-kept in lockstep -- see bench/README.md). Columns:
+#
+#   op        a            b
+#
+# "a" is the value preloaded into fp0 (the destination register for
+# dyadic ops, the operand for monadic ops). "b" is preloaded into fp1
+# and used only by dyadic ops ("-" means unused). The harness computes
+# the expected result itself, on the host, from a/b using the matching
+# C operator or libm call -- there is no separate "expected" column to
+# keep in sync by hand.
+#
+# Values are carried over from src/ftest.asm's existing test cases so
+# a mismatch here is directly comparable to what that suite already
+# exercises on real hardware/WinUAE.
+
+fadd     1.1      2.2
+fsub     120.1    50.2
+fmul     12.1     2.25
+fdiv     25.25    2.5
+fabs     -5.5     -
+fneg     12.1     -
+fint     2.9      -
+fintrz   2.9      -
+fsqrt    4.25     -
+facos    0.72     -
+fasin    0.71     -
+fatan    2.25     -
+fcos     0.75     -
+fcosh    9.43     -
+fetox    3.66     -
+ftentox  5.12     -
+ftwotox  12.5     -
+flog2    7.25     -
+flog10   7.25     -
+flogn    7.25     -
+fsin     0.25     -
+fsinh    8.62     -
+ftan     3.91     -
+ftanh    6.11     -
