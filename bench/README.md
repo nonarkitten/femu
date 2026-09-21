@@ -83,10 +83,16 @@ measurable, not the full design in `../BENCHMARK.md`. Specifically:
 
 - **68020 only.** `M68K_CPU_TYPE_68020`, `FLAGS020`-equivalent build.
   68040 (`STACK040`) isn't wired up yet.
-- **Register-to-register only.** Every vector uses `fp0`/`fp1` direct
-  addressing (`GETDATALENGTH`'s "always double" fast path). No `Dn`,
-  `(An)`, `(An)+`, `d16(An)`, or immediate addressing-mode vectors yet
-  — `../BENCHMARK.md` calls these out as follow-up coverage.
+- **Register-to-register only, except for one dedicated probe.** Every
+  vector in `vectors/ops.txt` uses `fp0`/`fp1` direct addressing
+  (`GETDATALENGTH`'s "always double" fast path). No `Dn`, `(An)+`,
+  `d16(An)`, or immediate addressing-mode vectors yet — `../BENCHMARK.md`
+  calls these out as follow-up coverage. The one exception:
+  `src/fmove_probe.asm` + `run_fmove_probe()` in `harness.c` test
+  `fmove`/`fmovem` via `(a0)` addressing specifically, built for
+  checklist row `#4`'s design pass (see `../DESIGN-04-native-extended-repr.md`)
+  — outside the vectors.txt/ops.asm lockstep convention, since it needs
+  a populated memory operand rather than just register contents.
 - **No single-precision (`fs*`) or extended-precision (`fd*` in the
   40-bit-mantissa sense) variant vectors** — only the plain (double)
   opcode forms in `vectors/ops.txt`.

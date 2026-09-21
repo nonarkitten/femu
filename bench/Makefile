@@ -20,7 +20,7 @@ ASMFLAGS020  = -m68020 -DCPU020 -DSTACK020 -I$(SRC)
 ASMFLAGSMOT  = -Fbin
 
 .PHONY: all run clean vasm-tool
-all: $(BUILD)/femu-bench $(BUILD)/femu020.bin $(BUILD)/femu020m.bin $(BUILD)/ops.bin
+all: $(BUILD)/femu-bench $(BUILD)/femu020.bin $(BUILD)/femu020m.bin $(BUILD)/ops.bin $(BUILD)/fmove_probe.bin
 
 run: all
 	cd $(CURDIR) && ./$(BUILD)/femu-bench
@@ -48,6 +48,9 @@ $(BUILD)/femu020m.bin: src/bench_wrapper.asm $(SRC)/femu.asm $(VASM)
 # --- the test opcodes, assembled with real FPU mnemonics ----------------
 $(BUILD)/ops.bin: src/ops.asm $(VASM)
 	$(VASM) $(ASMFLAGSMOT) -m68020 -m68881 -o $@ src/ops.asm
+
+$(BUILD)/fmove_probe.bin: src/fmove_probe.asm $(VASM)
+	$(VASM) $(ASMFLAGSMOT) -m68020 -m68881 -o $@ src/fmove_probe.asm
 
 # --- Musashi: generate its opcode tables, then compile the core ---------
 $(BUILD)/m68kmake: $(MUSASHI_DIR)/m68kmake.c
