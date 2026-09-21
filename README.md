@@ -40,3 +40,58 @@ femustart - Detects CPU and automatically starts correct version.
 You can use femu for you own pleasure. There is no guarantee. If femu
 corrupts your HDD or burns down your house, responsibility is yours only.
 You are responsible of backing up and restoring your files. 
+
+## Performance Optimization Plan
+
+Software FPU emulation is never going to be fast, but the current
+implementation leaves a lot on the table: nearly every arithmetic and
+transcendental opcode calls out to `mathieeedoubbas.library` /
+`mathieeedoubtrans.library` over `jsr`, every trap pays for a full
+register save/restore and `rte` even when the next instruction is another
+FPU op, and the internal double-precision format forces a pack/unpack
+round trip on every value that crosses the register boundary. This section
+tracks the plan to fix that.
+
+Three companion docs go with this plan:
+
+- **`CLAUDE.md`** — the working agreement: goals, and low-level/assembly
+  practices for this repo. Read it before starting any row below.
+- **`BENCHMARK.md`** — the concrete, host-runnable way we measure a
+  speedup (a headless 68K core, not real hardware — see that doc for why).
+- **`NEXT.md`** — a one-paragraph kickoff, meant to bootstrap a fresh
+  session without dragging this whole history forward.
+
+### Workflow
+
+For each row in the checklist below:
+
+1. Branch off `master` as `perf/<id>-<slug>`.
+2. Implement that one idea, and nothing else.
+3. Benchmark before/after per `BENCHMARK.md`.
+4. **Actual improvement** (net cycle win, no correctness regression) →
+   merge to `master`, mark the row ✅, record the measured delta.
+   **No win, or a regression** → mark the row ❌, ~~strike the idea~~,
+   write one sentence on why, leave the branch pushed and **unmerged —
+   never deleted**, in case a later dependency changes the answer.
+5. Return to `master`, pick the next row whose dependencies are ✅.
+
+### Checklist
+
+| # | Idea | Depends on | Status | Branch | Result |
+|---|------|------------|--------|--------|--------|
+| 0 | Build the `bench/` cycle-counting harness (Musashi-based) and port golden test vectors from `ftest.asm`, fixing its dead-code bug along the way | — | 🔲 Not started | `perf/00-bench-harness` | Prerequisite for measuring every row below |
+| 1 | Implement real native mantissa multiply/divide (`MUL64`/`DIV64`) and finish `FE_FADD`/`FE_FMUL`/`FE_FSUB`/`FE_FDIV` under `NOMATHLIB` — today `FE_FMUL` multiplies mantissas with `ADD64`, which is simply wrong | 0 | 🔲 Not started | `perf/01-native-basic-ops` | |
+| 2 | Make `NOMATHLIB` the default: drop the `mathieeedoubbas.library`/`mathieeedoubtrans.library` calls for `fadd`/`fsub`/`fmul`/`fdiv`/`fcmp`/`fneg`/`fabs`, eliminating the library `jsr` and its OpenLibrary dependency | 1 | 🔲 Not started | `perf/02-nomathlib-default` | |
+| 3 | Relaxed-IEEE fast path: skip Inf/NaN/denormal special-casing when it's cheap to prove the operands don't need it, only fall through to the correct slow path when a check (already mostly present, e.g. the `$7ff` exponent test) says otherwise — no silent wrong answers, see `CLAUDE.md` | 1 | 🔲 Not started | `perf/03-relaxed-ieee` | |
+| 4 | Native internal representation: carry FP values internally in a format matching the CPU's 80-bit extended register (explicit integer bit, 16-bit exponent) instead of packed IEEE double, so `fmove` to/from an FPn register needs no hidden-bit insert/strip; convert to IEEE double/single only when writing to memory in that format | 1 | 🔲 Not started | `perf/04-native-extended-repr` | |
+| 5 | Force-single-precision fast path: when FPCR rounding precision or the opcode (`fsadd`/`fsmul`/...) says single, do 32-bit mantissa math instead of 64-bit — halves the work in `ALIGNEXPONENT`/`NORMALIZE` and avoids `MUL64`/`DIV64` for the common case | 1 | 🔲 Not started | `perf/05-single-precision-fastpath` | |
+| 6 | FPU-opcode chaining: before `POSTHANDLEEXCEPTION`/`rte`, peek at the instruction word(s) after the one just emulated; if it's another F-line opcode, loop back into `EmulateInstruction` directly instead of paying full exception entry/exit again | 0 | 🔲 Not started | `perf/06-opcode-chaining` | |
+| 7 | Trim the trap prologue/epilogue: `movem.l d0-d7/a0-sp` saves/restores all 15 registers on every trap; save only what the specific handler actually clobbers | 0, 6 | 🔲 Not started | `perf/07-lean-trap-frame` | |
+| 8 | EA-decode fast path in `src/utils/ea.asm` for the handful of addressing modes real code overwhelmingly uses (`Dn`, `(An)`, `(An)+`, `-(An)`, `d16(An)`), falling through to the existing general decoder for everything else | 0 | 🔲 Not started | `perf/08-ea-fastpath` | |
+| 9 | Fast paths for cheap special cases: `ftwotox`/`ftentox` with an integer exponent (bump the exponent field, no `Pow()` call), `fetox`/`flogn` at 0/1, multiply/divide by 0/1/power-of-two, `fsqrt` at 0/1 | 1 | 🔲 Not started | `perf/09-transcendental-fastpaths` | |
+| 10 | Native transcendentals: implement `facos`/`fasin`/`fatan`/`fcos`/`fcosh`/`fsin`/`fsinh`/`ftan`/`ftanh`/`fetox`/`flogn`/`flog2`/`flog10`/`fsincos` without `mathieeedoubtrans.library`, building on the native representation from #4 | 1, 4 | 🔲 Not started | `perf/10-native-transcendentals` | |
+| 11 | Fix `fmovem` bulk register move (flagged buggy in a TODO; hardware `fmovem` "fixes problems" per the same note) — correctness fix that's also a hot path for context-heavy code | 0 | 🔲 Not started | `perf/11-fmovem-fix` | |
+
+See `ISSUES.md` for the original author's per-opcode issue notes — several
+rows above trace directly back to entries there (e.g. "calls
+MathIeeeDoubTrans" for nearly every transcendental).
