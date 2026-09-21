@@ -148,11 +148,3 @@ make run
 ```
 
 See `bench/README.md` for what the output means and its current limits.
-make            # builds the harness against vendored Musashi
-./femu-bench --cpu 020 --branch $(git branch --show-current) \
-    --baseline baseline/020.json --vectors vectors/
-```
-
-(`bench/` doesn't exist yet — building it is checklist item `#0` in
-`README.md`. Everything above is the design to implement, not a
-description of code that's already there.)
