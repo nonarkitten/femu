@@ -26,6 +26,7 @@
 /* ---- memory map (see BENCHMARK.md) --------------------------------- */
 #define MEM_SIZE        0x00100000u
 #define TEST_CODE       0x00010000u   /* where the F-line op under test lives */
+#define EA_BUF          0x00060000u   /* scratch memory operand for fmove/fmovem probes */
 #define BAS_LIB_BASE    0x00080000u   /* fake mathieeedoubbas.library base */
 #define TRANS_LIB_BASE  0x00081000u   /* fake mathieeedoubtrans.library base */
 #define VEC_BASE        0x000F0000u   /* synthetic exception vector table (VBR) */
@@ -108,6 +109,41 @@ static void mem_put_double(unsigned addr, double v)
 	put_double(v, &hi, &lo);
 	wr_long(addr, hi);
 	wr_long(addr + 4, lo);
+}
+
+/* Motorola 96-bit ("extended") memory format: word0 = sign(1)+exp(15,
+ * bias 16383), word1 = reserved (0), word2:word3 = 64-bit mantissa with
+ * an explicit (not hidden) integer bit at bit 63. Mirrors what
+ * src/utils/type.asm's ExtendedToDouble/DoubleToExtended do, in host C,
+ * for probe test setup/verification -- see checklist item #4's design.
+ */
+static void mem_put_extended(unsigned addr, double v)
+{
+	uint64_t bits, mant;
+	unsigned sign, exp, biased_ext;
+	memcpy(&bits, &v, 8);
+	sign = (unsigned)(bits >> 63);
+	exp = (unsigned)((bits >> 52) & 0x7ff);
+	if (exp == 0) { biased_ext = 0; mant = 0; }
+	else {
+		biased_ext = exp - 1023 + 16383;
+		mant = (1ULL << 63) | ((bits & ((1ULL << 52) - 1)) << 11);
+	}
+	wr_long(addr, (sign << 31) | (biased_ext << 16));
+	wr_long(addr + 4, (unsigned)(mant >> 32));
+	wr_long(addr + 8, (unsigned)mant);
+}
+static double mem_get_extended(unsigned addr)
+{
+	unsigned word0 = rd_long(addr), mhi = rd_long(addr + 4), mlo = rd_long(addr + 8);
+	unsigned sign = word0 >> 31, biased_ext = (word0 >> 16) & 0x7fff;
+	uint64_t mant = ((uint64_t)mhi << 32) | mlo, bits;
+	double v;
+	if (biased_ext == 0 && mant == 0) { v = 0.0; if (sign) v = -v; return v; }
+	bits = ((uint64_t)sign << 63) | ((uint64_t)(biased_ext - 16383 + 1023) << 52) |
+	       ((mant & ~(1ULL << 63)) >> 11);
+	memcpy(&v, &bits, 8);
+	return v;
 }
 
 /* ---- fake mathieeedoubbas.library / mathieeedoubtrans.library ------- *
@@ -301,6 +337,135 @@ static double reference(const char *op, double a, double b)
 
 #define MAX_STEPS 500000
 
+/* Runs one 4-byte opcode already placed at TEST_CODE+offset and returns
+ * cycles taken, or -1 on timeout. Registers/memory must already be set
+ * up by the caller; this only resets the CPU and (re)installs the
+ * vector table/library bases, same as the main vector loop.
+ */
+static long run_one_opcode(const struct image *img, unsigned offset, int *done_out)
+{
+	unsigned test_pc = TEST_CODE + offset, resume_pc = test_pc + 4;
+	long total_cycles = 0;
+	int step;
+
+	m68k_pulse_reset();
+	m68k_set_reg(M68K_REG_VBR, VEC_BASE);
+	wr_long(VEC_BASE + 0x2c, img->handle_exception);
+	m68k_set_reg(M68K_REG_A7, SSP_INIT);
+	m68k_set_reg(M68K_REG_SR, 0x2700);
+	wr_long(img->bas_base_var, BAS_LIB_BASE);
+	wr_long(img->trans_base_var, TRANS_LIB_BASE);
+	m68k_set_reg(M68K_REG_A0, EA_BUF);
+	m68k_set_reg(M68K_REG_PC, test_pc);
+
+	stub_hit = 0;
+	for (step = 0; step < MAX_STEPS; step++) {
+		total_cycles += m68k_execute(1);
+		if (m68k_get_reg(NULL, M68K_REG_PC) == resume_pc &&
+		    m68k_get_reg(NULL, M68K_REG_A7) == SSP_INIT) {
+			*done_out = 1;
+			return total_cycles;
+		}
+	}
+	*done_out = 0;
+	return total_cycles;
+}
+
+/* Checklist item #4's design/measurement pass: how much do the memory-
+ * operand fmove/fmovem paths cost *today*, before any representation
+ * change? Register-to-register fmove isn't probed -- see the design
+ * doc for why it's already a straight copy and wouldn't move either
+ * way. Opcodes come from fmove_probe.asm, in this fixed order.
+ */
+static void run_fmove_probe(const struct image *img)
+{
+	static const char *names[6] = {
+		"fmove.x (a0),fp0", "fmove.x fp0,(a0)",
+		"fmove.d (a0),fp0", "fmove.d fp0,(a0)",
+		"fmovem.x (a0),fp0-fp3", "fmovem.x fp0-fp3,(a0)",
+	};
+	int i, done;
+	long cycles;
+	double got;
+
+	printf("\n=== fmove/fmovem memory-operand probe (checklist #4) ===\n");
+	printf("%-24s %14s %8s  %s\n", "op", "cycles", "ok", "note");
+
+	for (i = 0; i < 6; i++) {
+		switch (i) {
+		case 0: /* fmove.x (a0),fp0 */
+			mem_put_extended(EA_BUF, 1.5);
+			break;
+		case 1: /* fmove.x fp0,(a0) */
+			mem_put_double(img->reg_fpn + 0, 1.5);
+			memset(mem + EA_BUF, 0, 12);
+			break;
+		case 2: /* fmove.d (a0),fp0 */
+			mem_put_double(EA_BUF, 1.5);
+			break;
+		case 3: /* fmove.d fp0,(a0) */
+			mem_put_double(img->reg_fpn + 0, 1.5);
+			wr_long(EA_BUF, 0); wr_long(EA_BUF + 4, 0);
+			break;
+		case 4: /* fmovem.x (a0),fp0-fp3: four distinct extended values */
+			mem_put_extended(EA_BUF + 0, 1.5);
+			mem_put_extended(EA_BUF + 12, 2.5);
+			mem_put_extended(EA_BUF + 24, 3.5);
+			mem_put_extended(EA_BUF + 36, 4.5);
+			break;
+		case 5: /* fmovem.x fp0-fp3,(a0) */
+			mem_put_double(img->reg_fpn + 0, 1.5);
+			mem_put_double(img->reg_fpn + 8, 2.5);
+			mem_put_double(img->reg_fpn + 16, 3.5);
+			mem_put_double(img->reg_fpn + 24, 4.5);
+			memset(mem + EA_BUF, 0, 48);
+			break;
+		}
+
+		cycles = run_one_opcode(img, (unsigned)i * 4, &done);
+		if (!done) {
+			printf("%-24s %14s %8s  TIMEOUT after %d steps%s\n",
+			       names[i], "-", "-", MAX_STEPS, stub_hit ? " (stub)" : "");
+			continue;
+		}
+
+		switch (i) {
+		case 0: got = mem_double(img->reg_fpn + 0);
+			printf("%-24s %14ld %8s  got %.17g, want 1.5\n", names[i], cycles,
+			       got == 1.5 ? "ok" : "WRONG", got);
+			break;
+		case 1: got = mem_get_extended(EA_BUF);
+			printf("%-24s %14ld %8s  got %.17g, want 1.5\n", names[i], cycles,
+			       got == 1.5 ? "ok" : "WRONG", got);
+			break;
+		case 2: got = mem_double(img->reg_fpn + 0);
+			printf("%-24s %14ld %8s  got %.17g, want 1.5\n", names[i], cycles,
+			       got == 1.5 ? "ok" : "WRONG", got);
+			break;
+		case 3: got = mem_double(EA_BUF);
+			printf("%-24s %14ld %8s  got %.17g, want 1.5\n", names[i], cycles,
+			       got == 1.5 ? "ok" : "WRONG", got);
+			break;
+		case 4: {
+			double g0 = mem_double(img->reg_fpn + 0), g1 = mem_double(img->reg_fpn + 8),
+			       g2 = mem_double(img->reg_fpn + 16), g3 = mem_double(img->reg_fpn + 24);
+			int ok = (g0 == 1.5 && g1 == 2.5 && g2 == 3.5 && g3 == 4.5);
+			printf("%-24s %14ld %8s  fp0-fp3 got %.3g,%.3g,%.3g,%.3g want 1.5,2.5,3.5,4.5\n",
+			       names[i], cycles, ok ? "ok" : "WRONG", g0, g1, g2, g3);
+			break;
+		}
+		case 5: {
+			double g0 = mem_get_extended(EA_BUF + 0), g1 = mem_get_extended(EA_BUF + 12),
+			       g2 = mem_get_extended(EA_BUF + 24), g3 = mem_get_extended(EA_BUF + 36);
+			int ok = (g0 == 1.5 && g1 == 2.5 && g2 == 3.5 && g3 == 4.5);
+			printf("%-24s %14ld %8s  mem got %.3g,%.3g,%.3g,%.3g want 1.5,2.5,3.5,4.5\n",
+			       names[i], cycles, ok ? "ok" : "WRONG", g0, g1, g2, g3);
+			break;
+		}
+		}
+	}
+}
+
 int main(int argc, char **argv)
 {
 	const char *variant_paths[2] = { "build/femu020.bin", "build/femu020m.bin" };
@@ -394,6 +559,36 @@ int main(int argc, char **argv)
 			       actual, expected,
 			       stub_hit ? " (stub)" : "");
 		}
+	}
+
+	/* fmove/fmovem memory-operand probe for checklist #4's design pass.
+	 * NOMATHLIB doesn't affect these paths (no library calls either
+	 * way -- see the design doc), so the library build is enough.
+	 */
+	{
+		struct image img;
+		unsigned char probe_ops[6 * 4];
+		size_t fsize = 0, probe_size;
+		FILE *pf;
+
+		pf = fopen("build/fmove_probe.bin", "rb");
+		if (!pf) { fprintf(stderr, "bench: build/fmove_probe.bin missing -- run make first\n"); return 1; }
+		probe_size = fread(probe_ops, 1, sizeof probe_ops, pf);
+		fclose(pf);
+		if (probe_size != sizeof probe_ops) {
+			fprintf(stderr, "bench: build/fmove_probe.bin has the wrong size (%zu bytes, expected %zu)\n",
+			        probe_size, sizeof probe_ops);
+			return 1;
+		}
+
+		memset(mem, 0, MEM_SIZE);
+		load_binary(variant_paths[0], 0, &fsize);
+		parse_image_header(&img);
+		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
+		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
+		memcpy(mem + TEST_CODE, probe_ops, sizeof probe_ops);
+
+		run_fmove_probe(&img);
 	}
 
 	return 0;

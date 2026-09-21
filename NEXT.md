@@ -23,12 +23,23 @@ next.
 
 ## Current state
 
-`#0`-`#3` are all ✅ (bench harness; native `MUL64`/`DIV64` + real
-`FE_FMUL`/`FE_FDIV`; `NOMATHLIB` made the default for `fadd`/`fsub`/
-`fmul`/`fdiv`; the Inf/NaN/zero fast path). Everything depending only on
-`#1` is unblocked: `#4` (native extended-precision internal
-representation), `#5` (single-precision fast path), `#9`/`#10`
-(transcendental fast paths / native transcendentals).
+`#0`-`#3` are all ✅. `#4` is ❌-as-scoped: measured (not guessed) that
+the full internal-representation swap it describes is close to a wash
+for single `fmove.x`/`fmove.d` (the cost relocates, doesn't disappear),
+with the one clear, non-wash win being `fmovem`'s per-register
+conversion cost — see `DESIGN-04-native-extended-repr.md` for the full
+picture and a narrower recommendation (target `fmovem` specifically,
+not the whole representation). That's a reasonable next pick if you
+want to follow up on `#4`'s idea without its full risk. Otherwise,
+`#5` (single-precision fast path) and `#9`/`#10` (transcendental fast
+paths / native transcendentals) are unblocked and untouched by any of
+this.
+
+A real, pre-existing bug surfaced along the way and is still unfixed:
+`ExtendedToDouble` (`src/utils/type.asm`) rounds `fmove.x`/`fmovem.x`
+reads wrong by a tiny amount (extended 1.5 comes back as
+1.5000000001164082) — logged in `ISSUES.md`, small and independent of
+`#4`'s fate, a reasonable one to just fix on its own.
 
 Two things worth knowing before touching `fdiv` again: its cost
 (~4400-4700 cycles) is dominated by a 54-iteration one-bit-at-a-time

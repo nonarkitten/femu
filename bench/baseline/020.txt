@@ -90,3 +90,12 @@ fsin                  600      MATCH  0.24740395925452294 vs 0.24740395925452294
 fsinh                 600      MATCH  2770.6931066087172 vs 2770.6931066087172 (stub)
 ftan                  600      MATCH  0.96658293352388214 vs 0.96658293352388214 (stub)
 ftanh                 600      MATCH  0.99999013835680184 vs 0.99999013835680184 (stub)
+
+=== fmove/fmovem memory-operand probe (checklist #4) ===
+op                               cycles       ok  note
+fmove.x (a0),fp0                    844    WRONG  got 1.5000000001164082, want 1.5
+fmove.x fp0,(a0)                    732       ok  got 1.5, want 1.5
+fmove.d (a0),fp0                    695       ok  got 1.5, want 1.5
+fmove.d fp0,(a0)                    605       ok  got 1.5, want 1.5
+fmovem.x (a0),fp0-fp3              1457    WRONG  fp0-fp3 got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
+fmovem.x fp0-fp3,(a0)              1369       ok  mem got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
