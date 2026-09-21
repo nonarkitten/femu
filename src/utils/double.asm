@@ -115,18 +115,17 @@ NORMALIZE macro
 	.NormalizeOk:
 	
 	; Check for over- and underflows
-	; TODO: this is wip
-	;tst.l			\1		
-	;bgt.s			.NoUnderflow
-	;move.w			#0,\1
-	;move.l			#0,\2
-	;move.l			#0,\3
-	;.NoUnderflow:
-	;cmp.l			#2047,\1
-	;blt.s			.NoOverflow
-	;move.w			#$7ff,\1
-	;move.l			#0,\2
-	;move.l			#0,\3
-	;.NoOverflow:
+	tst.w			\1
+	bgt.s			.NoUnderflow
+	move.w			#0,\1
+	move.l			#0,\2
+	move.l			#0,\3
+	.NoUnderflow:
+	cmp.w			#2047,\1
+	blt.s			.NoOverflow
+	move.w			#$7ff,\1
+	move.l			#0,\2
+	move.l			#0,\3
+	.NoOverflow:
 	
 endm

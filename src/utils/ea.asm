@@ -186,6 +186,7 @@ endm
 ;
 ADDODWORD macro
 	move.w				(FAULTPC),d0
+	ext.l				d0
 	add.l				d0,a0
 	INREMENTPC			#2
 endm

@@ -14,33 +14,51 @@
 
 	
 ;
-; 
+; Entry point: runs the real test suite (see FtestMathBase/FtestMathTrans/
+; FtestCompare below). This used to be unreachable -- everything from here
+; down used to sit after an unconditional `rts` at the end of a block of
+; ad hoc debugging scratch code that ran instead of it. The scratch code
+; is kept below (FtestScratchFsave/FtestScratchFmovem), just off the
+; default path, rather than deleted.
 ;
 Ftest
+	jsr			FtestInit
+	jsr			FtestMathBase
+	jsr			FtestMathTrans
+	jsr			FtestCompare
+	jsr			FtestExit
+	rts
 
 
-
-
+;
+; Ad hoc debugging scratch: dumps an fsave state frame after a real fabs,
+; in supervisor mode. Not part of the automated suite -- call by hand
+; (e.g. from a debugger) when poking at fsave/frestore state frame
+; layout specifically.
+;
+FtestScratchFsave
 	movea.l		_AbsExecBase,a6
 	lea.l		.Super(pc),a5
 	jsr			_LVOSupervisor(a6)
 	rts
-	
+
 	.Super:
-	
-	clr.w $100
-	lea.l	.DING,a0
-	fabs	#1,fp0
-	fsave (a0)
-	clr.w $100
+	clr.w		$100
+	lea.l		.DING,a0
+	fabs		#1,fp0
+	fsave		(a0)
+	clr.w		$100
 	rte
 	.DING:
 	dc.l $ffffffff,$ffffffff,$ffffffff,$ffffffff,$ffffffff
-	
 
 
-	
-	
+;
+; Ad hoc debugging scratch: round-trips fp0-fp7 through fmovem to memory
+; and back. Not part of the automated suite -- call by hand when poking
+; at fmovem specifically (see the TODO on FmovemHandler).
+;
+FtestScratchFmovem
 	fmove.x		#1.1,fp0
 	fmove.x		#2.2,fp1
 	fmove.x		#3.3,fp2
@@ -53,22 +71,8 @@ Ftest
 	fmovem.x		.DaigaDaiga,fp0-fp7
 	fmovem.x		(sp)+,fp0-fp7
 	fmovem.x		fp0-fp7,.DaigaDaiga
-
-
-	clr.w $100
-	rte
+	rts
 	.DaigaDaiga:	dc.l 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-
-
-	rts
-	
-	
-	jsr FtestInit
-	jsr FtestMathBase
-	jsr FtestMathTrans
-	jsr FtestCompare
-	jsr FtestExit
-	rts
 
 	
 ;

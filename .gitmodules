@@ -1,0 +1,6 @@
+[submodule "bench/vendor/musashi"]
+	path = bench/vendor/musashi
+	url = https://github.com/kstenerud/musashi
+[submodule "bench/vendor/vasm"]
+	path = bench/vendor/vasm
+	url = https://github.com/alfishe/vasm

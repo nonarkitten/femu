@@ -50,3 +50,8 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# bench harness build output (see bench/Makefile) -- everything in here
+# is generated: assembled femu images, Musashi's generated opcode
+# tables, and the harness binary itself.
+bench/build/
