@@ -55,9 +55,12 @@ FintrzHandler
 	; Increment PC
 	INREMENTPC		#$04
 
-	; Get data
+	; Get data (extended-format operand, checklist #4 -- FE_FINTRZ's own
+	; bit-twiddling is written for the double layout, so wrap it with a
+	; conversion at each end rather than re-deriving its magic constants)
 	GETDATALENGTH	d0
-	GETEAVALUE		d0,d1
+	GETEAVALUE		d0,d1,d2
+	jsr				InternalToDouble
 
 	ifd NOMATHLIB
 		FE_FINTRZ
@@ -70,13 +73,14 @@ FintrzHandler
 		jsr				_LVOIEEEDPFloor(a6)
 		or.l	d4,d0			;recover sign bit
 	endc
-	
+	jsr				DoubleToInternal
+
 	; Write results
 	GETREGISTER		d5
-	MOVEDNTOFPN		d5,d0,d1
+	MOVEDNTOFPN		d5,d0,d1,d2
 
 	; Set condition codes
-	SETCC			d0,d1
+	SETCC			d0,d1,d2
 
 	; Done
 	rts

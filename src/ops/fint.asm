@@ -218,9 +218,13 @@ FintHandler
 	; Increment PC
 	INREMENTPC		#$04
 	
-	; Get data
+	; Get data (extended-format operand, checklist #4 -- FE_FINT's own
+	; bit-twiddling is written for the double layout, so wrap it with a
+	; conversion at each end rather than re-deriving its many magic
+	; constants for the extended layout)
 	GETDATALENGTH	d0
-	GETEAVALUE		d0,d1
+	GETEAVALUE		d0,d1,d2
+	jsr				InternalToDouble
 
 	ifd NOMATHLIB
 		FE_FINT
@@ -232,13 +236,14 @@ FintHandler
 		jsr				_LVOIEEEDPAdd(a6)
 		jsr				_LVOIEEEDPFloor(a6)
 	endc
-	
+	jsr				DoubleToInternal
+
 	; Write results
 	GETREGISTER		d5
-	MOVEDNTOFPN		d5,d0,d1
-	
+	MOVEDNTOFPN		d5,d0,d1,d2
+
 	; Set condition codes
-	SETCC			d0,d1
+	SETCC			d0,d1,d2
 	
 	; Done
 	rts

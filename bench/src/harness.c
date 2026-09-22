@@ -113,9 +113,11 @@ static void mem_put_double(unsigned addr, double v)
 
 /* Motorola 96-bit ("extended") memory format: word0 = sign(1)+exp(15,
  * bias 16383), word1 = reserved (0), word2:word3 = 64-bit mantissa with
- * an explicit (not hidden) integer bit at bit 63. Mirrors what
- * src/utils/type.asm's ExtendedToDouble/DoubleToExtended do, in host C,
- * for probe test setup/verification -- see checklist item #4's design.
+ * an explicit (not hidden) integer bit at bit 63. This is now femu's
+ * own internal RegFpn layout too (checklist #4 -- see
+ * src/utils/type.asm's InternalToDouble/DoubleToInternal), so this is
+ * used both to poke/peek FP registers directly and to set up fmove.x
+ * memory operands.
  */
 static void mem_put_extended(unsigned addr, double v)
 {
@@ -125,6 +127,16 @@ static void mem_put_extended(unsigned addr, double v)
 	sign = (unsigned)(bits >> 63);
 	exp = (unsigned)((bits >> 52) & 0x7ff);
 	if (exp == 0) { biased_ext = 0; mant = 0; }
+	else if (exp == 0x7ff) {
+		/* Inf/NaN: extended's exponent-all-ones pattern, not the affine
+		 * rebias below (which would land on some ordinary finite huge
+		 * value instead -- these need their own case, same as
+		 * DoubleToInternal in src/utils/type.asm). Infinity's mantissa
+		 * is the explicit-integer-bit-only pattern; any other nonzero
+		 * fraction stays a NaN. */
+		biased_ext = 0x7fff;
+		mant = (bits & ((1ULL << 52) - 1)) ? ((1ULL << 63) | ~0ULL) : (1ULL << 63);
+	}
 	else {
 		biased_ext = exp - 1023 + 16383;
 		mant = (1ULL << 63) | ((bits & ((1ULL << 52) - 1)) << 11);
@@ -140,8 +152,31 @@ static double mem_get_extended(unsigned addr)
 	uint64_t mant = ((uint64_t)mhi << 32) | mlo, bits;
 	double v;
 	if (biased_ext == 0 && mant == 0) { v = 0.0; if (sign) v = -v; return v; }
-	bits = ((uint64_t)sign << 63) | ((uint64_t)(biased_ext - 16383 + 1023) << 52) |
-	       ((mant & ~(1ULL << 63)) >> 11);
+	if (biased_ext == 0x7fff) {
+		/* Inf/NaN -- see mem_put_extended */
+		v = (mant == (1ULL << 63)) ? INFINITY : NAN;
+		if (sign) v = -v;
+		return v;
+	}
+	{
+		/* Round to nearest, ties to even, on the 11 fraction bits being
+		 * dropped -- matching src/utils/type.asm's InternalToDouble.
+		 * femu's own native fadd/fmul/fdiv compute directly in extended
+		 * precision and never call that conversion themselves (only
+		 * fmove.d/transcendentals/etc. do), so this harness-side
+		 * narrowing is the only place truncation-vs-rounding matters
+		 * for reading their results back as a double; without this a
+		 * correctly-computed extended result could read back 1 ULP off
+		 * from the double reference purely from this readback step.
+		 */
+		uint64_t frac63 = mant & ~(1ULL << 63);
+		uint64_t frac52 = frac63 >> 11;
+		unsigned round_bit = (unsigned)((frac63 >> 10) & 1);
+		unsigned sticky = (frac63 & 0x3ff) != 0;
+		if (round_bit && (sticky || (frac52 & 1))) frac52++;
+		bits = ((uint64_t)sign << 63) |
+		       (((uint64_t)(biased_ext - 16383 + 1023) << 52) + frac52);
+	}
 	memcpy(&v, &bits, 8);
 	return v;
 }
@@ -371,11 +406,14 @@ static long run_one_opcode(const struct image *img, unsigned offset, int *done_o
 	return total_cycles;
 }
 
-/* Checklist item #4's design/measurement pass: how much do the memory-
- * operand fmove/fmovem paths cost *today*, before any representation
- * change? Register-to-register fmove isn't probed -- see the design
- * doc for why it's already a straight copy and wouldn't move either
- * way. Opcodes come from fmove_probe.asm, in this fixed order.
+/* Checklist item #4's post-implementation probe: RegFpn is now the
+ * 96-bit extended layout itself, so fmove.x reg<->mem is a straight
+ * copy (both sides mem_put_extended/mem_get_extended at the register's
+ * own address) while fmove.d reg<->mem now pays the conversion that
+ * fmove.x used to pay (mem_put_double/mem_double against EA_BUF, an
+ * ordinary 8-byte double memory operand -- fmove.d's own memory format
+ * is unchanged, only the internal register format moved). Opcodes come
+ * from fmove_probe.asm, in this fixed order.
  */
 static void run_fmove_probe(const struct image *img)
 {
@@ -397,14 +435,14 @@ static void run_fmove_probe(const struct image *img)
 			mem_put_extended(EA_BUF, 1.5);
 			break;
 		case 1: /* fmove.x fp0,(a0) */
-			mem_put_double(img->reg_fpn + 0, 1.5);
+			mem_put_extended(img->reg_fpn + 0, 1.5);
 			memset(mem + EA_BUF, 0, 12);
 			break;
 		case 2: /* fmove.d (a0),fp0 */
 			mem_put_double(EA_BUF, 1.5);
 			break;
 		case 3: /* fmove.d fp0,(a0) */
-			mem_put_double(img->reg_fpn + 0, 1.5);
+			mem_put_extended(img->reg_fpn + 0, 1.5);
 			wr_long(EA_BUF, 0); wr_long(EA_BUF + 4, 0);
 			break;
 		case 4: /* fmovem.x (a0),fp0-fp3: four distinct extended values */
@@ -414,10 +452,10 @@ static void run_fmove_probe(const struct image *img)
 			mem_put_extended(EA_BUF + 36, 4.5);
 			break;
 		case 5: /* fmovem.x fp0-fp3,(a0) */
-			mem_put_double(img->reg_fpn + 0, 1.5);
-			mem_put_double(img->reg_fpn + 8, 2.5);
-			mem_put_double(img->reg_fpn + 16, 3.5);
-			mem_put_double(img->reg_fpn + 24, 4.5);
+			mem_put_extended(img->reg_fpn + 0, 1.5);
+			mem_put_extended(img->reg_fpn + 12, 2.5);
+			mem_put_extended(img->reg_fpn + 24, 3.5);
+			mem_put_extended(img->reg_fpn + 36, 4.5);
 			memset(mem + EA_BUF, 0, 48);
 			break;
 		}
@@ -430,7 +468,7 @@ static void run_fmove_probe(const struct image *img)
 		}
 
 		switch (i) {
-		case 0: got = mem_double(img->reg_fpn + 0);
+		case 0: got = mem_get_extended(img->reg_fpn + 0);
 			printf("%-24s %14ld %8s  got %.17g, want 1.5\n", names[i], cycles,
 			       got == 1.5 ? "ok" : "WRONG", got);
 			break;
@@ -438,7 +476,7 @@ static void run_fmove_probe(const struct image *img)
 			printf("%-24s %14ld %8s  got %.17g, want 1.5\n", names[i], cycles,
 			       got == 1.5 ? "ok" : "WRONG", got);
 			break;
-		case 2: got = mem_double(img->reg_fpn + 0);
+		case 2: got = mem_get_extended(img->reg_fpn + 0);
 			printf("%-24s %14ld %8s  got %.17g, want 1.5\n", names[i], cycles,
 			       got == 1.5 ? "ok" : "WRONG", got);
 			break;
@@ -447,8 +485,8 @@ static void run_fmove_probe(const struct image *img)
 			       got == 1.5 ? "ok" : "WRONG", got);
 			break;
 		case 4: {
-			double g0 = mem_double(img->reg_fpn + 0), g1 = mem_double(img->reg_fpn + 8),
-			       g2 = mem_double(img->reg_fpn + 16), g3 = mem_double(img->reg_fpn + 24);
+			double g0 = mem_get_extended(img->reg_fpn + 0), g1 = mem_get_extended(img->reg_fpn + 12),
+			       g2 = mem_get_extended(img->reg_fpn + 24), g3 = mem_get_extended(img->reg_fpn + 36);
 			int ok = (g0 == 1.5 && g1 == 2.5 && g2 == 3.5 && g3 == 4.5);
 			printf("%-24s %14ld %8s  fp0-fp3 got %.3g,%.3g,%.3g,%.3g want 1.5,2.5,3.5,4.5\n",
 			       names[i], cycles, ok ? "ok" : "WRONG", g0, g1, g2, g3);
@@ -530,8 +568,8 @@ int main(int argc, char **argv)
 			m68k_set_reg(M68K_REG_SR, 0x2700);
 			wr_long(img.bas_base_var, BAS_LIB_BASE);
 			wr_long(img.trans_base_var, TRANS_LIB_BASE);
-			mem_put_double(img.reg_fpn + 0, vecs[vi].a);
-			mem_put_double(img.reg_fpn + 8, vecs[vi].has_b ? vecs[vi].b : 0.0);
+			mem_put_extended(img.reg_fpn + 0, vecs[vi].a);
+			mem_put_extended(img.reg_fpn + 12, vecs[vi].has_b ? vecs[vi].b : 0.0);
 			m68k_set_reg(M68K_REG_PC, test_pc);
 
 			stub_hit = 0;
@@ -545,7 +583,7 @@ int main(int argc, char **argv)
 			}
 
 			expected = reference(vecs[vi].op, vecs[vi].a, vecs[vi].b);
-			actual = mem_double(img.reg_fpn + 0);
+			actual = mem_get_extended(img.reg_fpn + 0);
 
 			if (!done) {
 				printf("%-10s %14s %10s  TIMEOUT after %d steps\n",

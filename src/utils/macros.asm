@@ -107,14 +107,19 @@ endm
 
 
 ;
-; Moves value from floating point register to data register.
+; Moves value from floating point register to data registers. Non-FPN080
+; RegFpn is 12 bytes/register (checklist #4's native extended layout) --
+; 68020 scaled-index addressing only allows scale factors 1/2/4/8, so the
+; *12 byte offset is built as two chained LEAs (index*8, then +index*4)
+; rather than a single scaled move, at the cost of one extra instruction.
 ;
 ; INPUTS
 ;	\1 -- Index register.
 ;
 ; RESULT
-;	\2 -- Data register.
-;	\3 -- Data register.
+;	\2 -- Data register (sign:1/exponent:15/reserved:16).
+;	\3 -- Data register (mantissa bits 63-32, explicit integer bit at 31).
+;	\4 -- Data register (mantissa bits 31-0).
 ;
 MOVEFPNTODN macro
 	ifd FPN080
@@ -124,20 +129,21 @@ MOVEFPNTODN macro
 		subi.b		#32,\1
 	else
 		lea.l		RegFpn,a1
-		movem.l		(a1,\1.w*8),\2/\3
+		lea.l		(a1,\1.w*8),a1
+		lea.l		(a1,\1.w*4),a1
+		movem.l		(a1),\2/\3/\4
 	endif
 endm
 
 
 ;
-; Moves value from data register to floating point register.
-; 
+; Moves value from data registers to floating point register.
+;
 ; INPUTS
 ;	\1 -- Index register.
-;
-; RESULT
-;	\2 -- Data register.
-;	\3 -- Data register.
+;	\2 -- Data register (sign:1/exponent:15/reserved:16).
+;	\3 -- Data register (mantissa bits 63-32, explicit integer bit at 31).
+;	\4 -- Data register (mantissa bits 31-0).
 ;
 MOVEDNTOFPN macro
 	ifd FPN080
@@ -147,13 +153,16 @@ MOVEDNTOFPN macro
 		subi.b		#32,\1
 	else
 		lea.l		RegFpn,a1
-		movem.l		\2/\3,(a1,\1.w*8)
+		lea.l		(a1,\1.w*8),a1
+		lea.l		(a1,\1.w*4),a1
+		movem.l		\2/\3/\4,(a1)
 	endif
 endm
 
 
 ;
-; Moves value from floating point register to memory.
+; Moves value from floating point register to memory (12 bytes, native
+; extended layout -- see MOVEFPNTODN for why the *12 offset is two LEAs).
 ;
 ; INPUTS
 ;	\1 -- Index register.
@@ -168,15 +177,19 @@ MOVEFPNTOEA macro
 		subi.b		#32,\1
 	else
 		lea.l		RegFpn,a0
-		move.l		(a0,\1.w*8),(\2)
-		move.l		($04,a0,\1.w*8),$04(\2)
+		lea.l		(a0,\1.w*8),a0
+		lea.l		(a0,\1.w*4),a0
+		move.l		(a0),(\2)
+		move.l		($04,a0),$04(\2)
+		move.l		($08,a0),$08(\2)
 	endif
 endm
 
 
 ;
-; Moves value from memory to floating point register.
-; 
+; Moves value from memory to floating point register (12 bytes, native
+; extended layout -- see MOVEFPNTODN for why the *12 offset is two LEAs).
+;
 ; INPUTS
 ;	\2 -- Address register.
 ;
@@ -190,8 +203,11 @@ MOVEEATOFPN macro
 		subi.b		#32,\1
 	else
 		lea.l		RegFpn,a0
-		move.l		(\2),(a0,\1.w*8)
-		move.l		$04(\2),($04,a0,\1.w*8)
+		lea.l		(a0,\1.w*8),a0
+		lea.l		(a0,\1.w*4),a0
+		move.l		(\2),(a0)
+		move.l		$04(\2),($04,a0)
+		move.l		$08(\2),($08,a0)
 	endif
 endm
 
@@ -323,14 +339,15 @@ REVERSEDBYTES
 
 
 ;
-; Sets FPSR condition code based on double value. 
-; Function will modify values and will not restore 
-; them so be aware (call this as last step). 
-; 
+; Sets FPSR condition code based on an extended value (checklist #4's
+; native internal format). Function will modify values and will not
+; restore them so be aware (call this as last step).
+;
 ; INPUTS
-;	\1 -- Double.
-;   \2 -- Double.
-; 
+;	\1 -- Sign(1):exponent(15):reserved(16).
+;	\2 -- Mantissa bits 63-32 (explicit integer bit at bit 31).
+;	\3 -- Mantissa bits 31-0.
+;
 SETCC macro
 
 	; Clear all flags
@@ -341,31 +358,38 @@ SETCC macro
 	beq.s		.NoN
 	ori.b		#CCN,d6
 	.NoN:
-	
-	; Check and set Z flag
+
+	; Check and set Z flag -- exponent, mantissa hi, mantissa lo all zero
 	tst.l		\1
 	bne.s		.NoZ
 	tst.l		\2
 	bne.s		.NoZ
+	tst.l		\3
+	bne.s		.NoZ
 	ori.b		#CCZ,d6
 	bra.s		.FlagsOk
 	.NoZ:
-	
-	; Check NaN and I flags
-	cmp.l		#$7ff00000,\1
+
+	; Check NaN and I flags: exponent field all-ones ($7fff). Unlike the
+	; double-format version this replaced, the reserved word (bits 15-0
+	; of \1) is always 0, so \1 >= $7fff0000 implies \1 == $7fff0000
+	; exactly -- no need to re-test equality, just the mantissa.
+	cmp.l		#$7fff0000,\1
 	bmi.s		.FlagsOk
-	
-	; Check and set I flag
+
+	; Infinity iff mantissa is exactly the explicit-integer-bit-only
+	; pattern ($8000000000000000); anything else with this exponent is NaN.
+	cmp.l		#$80000000,\2
 	bne.s		.IsNan
-	tst.l		\2
+	tst.l		\3
 	bne.s		.IsNan
 	ori.b		#CCI,d6
 	bra.s		.FlagsOk
-	
+
 	; Check and set NaN flag
 	.IsNan:
 	ori.b		#CCNAN,d6
-	
+
 	; Done
 	.FlagsOk:
 	ifd	FPSR080

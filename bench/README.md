@@ -85,14 +85,28 @@ measurable, not the full design in `../BENCHMARK.md`. Specifically:
   68040 (`STACK040`) isn't wired up yet.
 - **Register-to-register only, except for one dedicated probe.** Every
   vector in `vectors/ops.txt` uses `fp0`/`fp1` direct addressing
-  (`GETDATALENGTH`'s "always double" fast path). No `Dn`, `(An)+`,
-  `d16(An)`, or immediate addressing-mode vectors yet — `../BENCHMARK.md`
-  calls these out as follow-up coverage. The one exception:
-  `src/fmove_probe.asm` + `run_fmove_probe()` in `harness.c` test
-  `fmove`/`fmovem` via `(a0)` addressing specifically, built for
-  checklist row `#4`'s design pass (see `../DESIGN-04-native-extended-repr.md`)
-  — outside the vectors.txt/ops.asm lockstep convention, since it needs
-  a populated memory operand rather than just register contents.
+  (`GETDATALENGTH`'s register-direct fast path, which since checklist
+  `#4` returns the internal extended format straight from `RegFpn`, no
+  conversion). No `Dn`, `(An)+`, `d16(An)`, or immediate addressing-mode
+  vectors yet — `../BENCHMARK.md` calls these out as follow-up coverage.
+  The one exception: `src/fmove_probe.asm` + `run_fmove_probe()` in
+  `harness.c` test `fmove`/`fmovem` via `(a0)` addressing specifically,
+  originally built for checklist row `#4`'s design pass and now doubling
+  as a correctness/regression check now that `#4` landed (see
+  `../DESIGN-04-native-extended-repr.md` for the design, `../README.md`'s
+  `#4` row for the measured before/after) — outside the vectors.txt/
+  ops.asm lockstep convention, since it needs a populated memory operand
+  rather than just register contents.
+- **`RegFpn` is femu's native 68881 extended layout, not a double**
+  (checklist `#4`): 16 registers × 12 bytes (sign:1/exponent:15/
+  reserved:16/mantissa:64-explicit-bit). `mem_put_extended`/
+  `mem_get_extended` in `harness.c` are the host-double↔this-layout
+  helpers, used both for register pokes/reads and for `.x` memory
+  operands; they special-case zero/Inf/NaN and round to nearest (ties to
+  even) when narrowing back to a host double, mirroring
+  `src/utils/type.asm`'s `DoubleToInternal`/`InternalToDouble` exactly —
+  if these drift from that assembly, comparisons silently go wrong
+  without the harness itself misbehaving.
 - **No single-precision (`fs*`) or extended-precision (`fd*` in the
   40-bit-mantissa sense) variant vectors** — only the plain (double)
   opcode forms in `vectors/ops.txt`.

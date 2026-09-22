@@ -1,21 +1,26 @@
 ;
-; Gets value of the ea of the instruction as a double.
+; Gets value of the ea of the instruction in internal (native extended)
+; format -- checklist #4's "enter the FPU" boundary.
 ;
 ; INPUTS
 ;	d0 -- Data length in bytes.
 ;	INSTRUCTION -- The instruction.
 ;
 ; RESULT
-;	\1 -- Highest 32 bits of the double.
-;	\2 -- Lowest 32 bits of the double.
+;	\1 -- Sign(1):exponent(15):reserved(16).
+;	\2 -- Mantissa bits 63-32 (explicit integer bit at bit 31).
+;	\3 -- Mantissa bits 31-0.
 ;
 GETEAVALUE macro
 	jsr				GetEaValue
-	ifnc \1,d0 
+	ifnc \1,d0
 		move.l			d0,\1
 	endif
-	ifnc \2,d1 
+	ifnc \2,d1
 		move.l			d1,\2
+	endif
+	ifnc \3,d2
+		move.l			d2,\3
 	endif
 endm
 
@@ -224,64 +229,70 @@ endm
 ;
 GetEaValue
 
-	; Register to register is always a double
+	; Register to register: already the internal format, straight copy
+	; -- no conversion needed at all (checklist #4's "already free"
+	; register-to-register case). d3 holds the index rather than d2,
+	; purely to avoid a same-register index/output dual role; the
+	; index's value is fully consumed by MOVEFPNTODN's address
+	; computation before it writes its result registers regardless.
 	btst.l			#14,INSTRUCTION
 	bne.s			.NoRegReg
-	bfextu			INSTRUCTION{19:3},d2
-	MOVEFPNTODN		d2,d0,d1
+	bfextu			INSTRUCTION{19:3},d3
+	MOVEFPNTODN		d3,d0,d1,d2
 	rts
 	.NoRegReg:
-	
+
 	; Jump to data format specific getter
 	bfextu			INSTRUCTION{19:3},d1
 	jmp				(GetEaValueVectors,d1.w*4)
-		
+
 	; Byte
 	GetEaValueByte:
 	jsr				GetEa
 	move.b			(a0),d0
-	jsr				ByteToDouble
+	jsr				ByteToInternal
 	rts
-	
+
 	; Word
 	GetEaValueWord:
 	jsr				GetEa
 	move.w			(a0),d0
-	jsr				WordToDouble	
+	jsr				WordToInternal
 	rts
-	
+
 	; Long
 	GetEaValueLong:
 	jsr				GetEa
 	move.l			(a0),d0
-	jsr				LongToDouble	
+	jsr				LongToInternal
 	rts
-	
+
 	; Single
 	GetEaValueSingle:
 	jsr				GetEa
 	move.l			(a0),d0
-	jsr				SingleToDouble	
+	jsr				SingleToInternal
 	rts
-	
+
 	; Double
 	GetEaValueDouble:
 	jsr				GetEa
 	movem.l			(a0),d0/d1
+	jsr				DoubleToInternal
 	rts
-	
-	; Extended
+
+	; Extended: memory layout is byte-identical to the internal format
+	; (checklist #4's whole point) -- straight copy, no conversion call.
 	GetEaValueExtended:
 	jsr				GetEa
 	movem.l			(a0),d0/d1/d2
-	jsr				ExtendedToDouble	
 	rts
-	
+
 	; Packed
 	GetEaValuePacked:
 	jsr				GetEa
 	movem.l			(a0),d0/d1/d2
-	jsr				PackedToDouble	
+	jsr				PackedToInternal
 	rts
 
 
@@ -310,9 +321,13 @@ GetEa
 		lea.l				TempEa,a0
 		MOVEFPNTOEA			d1,a0
 	else
-		lsl.b				#3,d1
+		; RegFpn is 12 bytes/register now (checklist #4) -- not a valid
+		; scaled-index factor, so build the *12 offset as two chained
+		; LEAs (index*8, then +index*4) the same way macros.asm's
+		; MOVEFPNTODN etc. do, rather than clobbering d1 with a multiply.
 		lea.l				RegFpn,a0
-		adda.l				d1,a0
+		lea.l				(a0,d1.w*8),a0
+		lea.l				(a0,d1.w*4),a0
 	endif
 	rts
 	.NoRegReg:

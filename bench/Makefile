@@ -19,6 +19,13 @@ VASM = $(BUILD)/vasmm68k_mot
 ASMFLAGS020  = -m68020 -DCPU020 -DSTACK020 -I$(SRC)
 ASMFLAGSMOT  = -Fbin
 
+# femu.asm includes dozens of utils/*.asm and ops/*.asm files by relative
+# path; make can't see through vasm's own `include` directives, so without
+# this the femu020*.bin targets below only rebuild when femu.asm itself
+# changes -- editing e.g. src/ops/fadd.asm silently leaves a stale binary
+# in place (bit this project more than once).
+FEMU_SRCS := $(shell find $(SRC) -name '*.asm')
+
 .PHONY: all run clean vasm-tool
 all: $(BUILD)/femu-bench $(BUILD)/femu020.bin $(BUILD)/femu020m.bin $(BUILD)/ops.bin $(BUILD)/fmove_probe.bin
 
@@ -39,10 +46,10 @@ $(VASM):
 	fi
 
 # --- femu itself, assembled flat (no vlink needed -- see BENCHMARK.md) --
-$(BUILD)/femu020.bin: src/bench_wrapper.asm $(SRC)/femu.asm $(VASM)
+$(BUILD)/femu020.bin: src/bench_wrapper.asm $(FEMU_SRCS) $(VASM)
 	$(VASM) $(ASMFLAGSMOT) $(ASMFLAGS020) -o $@ src/bench_wrapper.asm
 
-$(BUILD)/femu020m.bin: src/bench_wrapper.asm $(SRC)/femu.asm $(VASM)
+$(BUILD)/femu020m.bin: src/bench_wrapper.asm $(FEMU_SRCS) $(VASM)
 	$(VASM) $(ASMFLAGSMOT) $(ASMFLAGS020) -DNOMATHLIB -o $@ src/bench_wrapper.asm
 
 # --- the test opcodes, assembled with real FPU mnemonics ----------------

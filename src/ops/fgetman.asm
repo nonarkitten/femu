@@ -11,20 +11,22 @@ FgetmanHandler
 	; Increment PC
 	INREMENTPC		#$04
 	
-	; Get data
+	; Get data (extended format, checklist #4: 15-bit exponent, bias
+	; 16383 -- widened in proportion only, this op was already broken
+	; before this port and stays broken, see the TODO above)
 	GETDATALENGTH	d0
-	GETEAVALUE		d0,d1
-	
+	GETEAVALUE		d0,d1,d2
+
 	; Emulate instruction
-	move.l			#-1023,d0
-	bfins			d0,d0{1:11}
-	
+	move.l			#-16383,d0
+	bfins			d0,d0{1:15}
+
 	; Write results
 	GETREGISTER		d5
-	MOVEDNTOFPN		d5,d0,d1
-	
+	MOVEDNTOFPN		d5,d0,d1,d2
+
 	; Set condition codes
-	SETCC			d0,d1
+	SETCC			d0,d1,d2
 	
 	; Done
 	rts

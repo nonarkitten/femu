@@ -37,15 +37,19 @@ endm
 
 
 ;
-;
+; fmovem's memory format is always 96-bit extended (FMOVEMLENGTHS below
+; is all multiples of 12) -- byte-identical to the internal format now
+; (checklist #4), so this is a straight movem.l with no per-register
+; ExtendedToDouble/DoubleToExtended jsr at all anymore. This is the one
+; place #4's design pass found an unambiguous win: the old version paid
+; that conversion once per register in the list.
 ;
 FMOVEMEAFPN macro
 	btst.l			#\1,\2
 	beq.s			.\@NoMove
     movem.l			(a3),d0/d1/d2
-	jsr				ExtendedToDouble
     move.l          #\1,d5
-	MOVEDNTOFPN     d5,d0,d1
+	MOVEDNTOFPN     d5,d0,d1,d2
     adda.l			#$0c,a3
     .\@NoMove:
 endm
@@ -58,8 +62,7 @@ FMOVEMFPNEA macro
 	btst.l			#\1,\2
 	beq.s			.\@NoMove
     move.l          #\1,d5
-	MOVEFPNTODN		d5,d0,d1
-	jsr				DoubleToExtended
+	MOVEFPNTODN		d5,d0,d1,d2
     movem.l			d0/d1/d2,(a3)
 	adda.l			#$0c,a3
     .\@NoMove:
