@@ -281,7 +281,7 @@ static int illg_stub(int opcode)
 
 /* ---- test image loading ---------------------------------------------- */
 struct image {
-	unsigned handle_exception, reg_fpn, bas_base_var, trans_base_var;
+	unsigned handle_exception, reg_fpn, bas_base_var, trans_base_var, reg_fpcr_mode;
 };
 
 static void load_binary(const char *path, unsigned base, size_t *out_size)
@@ -304,6 +304,7 @@ static void parse_image_header(struct image *img)
 	img->reg_fpn = rd_long(8);
 	img->bas_base_var = rd_long(12);
 	img->trans_base_var = rd_long(16);
+	img->reg_fpcr_mode = rd_long(20);
 }
 
 static void fill_illegal(unsigned base, unsigned size)
@@ -377,6 +378,14 @@ static double reference(const char *op, double a, double b)
  * up by the caller; this only resets the CPU and (re)installs the
  * vector table/library bases, same as the main vector loop.
  */
+/* Set by a caller right before run_one_opcode when it needs the plain
+ * fmul/fdmul dispatch to take FE_FMUL_SINGLE's runtime FPCR check
+ * (checklist #5) -- reset to 0 (extended) by run_one_opcode itself on
+ * every call, so a probe never leaks its FPCR setting into the next
+ * vector.
+ */
+static unsigned char forced_fpcr_mode;
+
 static long run_one_opcode(const struct image *img, unsigned offset, int *done_out)
 {
 	unsigned test_pc = TEST_CODE + offset, resume_pc = test_pc + 4;
@@ -390,6 +399,7 @@ static long run_one_opcode(const struct image *img, unsigned offset, int *done_o
 	m68k_set_reg(M68K_REG_SR, 0x2700);
 	wr_long(img->bas_base_var, BAS_LIB_BASE);
 	wr_long(img->trans_base_var, TRANS_LIB_BASE);
+	if (img->reg_fpcr_mode) mem[img->reg_fpcr_mode] = forced_fpcr_mode;
 	m68k_set_reg(M68K_REG_A0, EA_BUF);
 	m68k_set_reg(M68K_REG_PC, test_pc);
 
@@ -501,6 +511,64 @@ static void run_fmove_probe(const struct image *img)
 			break;
 		}
 		}
+	}
+}
+
+/* Checklist item #5's single-precision fast path probe: fsmul/fsglmul/
+ * fsdiv/fsgldiv (opcode-forced single, no FPCR check) and plain fmul/
+ * fdiv with FPCR's rounding precision field set to single ($40, see
+ * src/utils/fpu.asm's FPCR_SINGLE -- the runtime-check path
+ * FMULHANDLER/FDIVHANDLER takes when \1 is blank). The mul operands
+ * (16777215.0 = 2^24-1, the largest representable float32 integer,
+ * times 3.0) force real round-to-nearest-even at the 24-bit mantissa
+ * boundary (50331645 -> 50331644); the div operands (7.0/3.0) aren't
+ * exact in binary at all, forcing real rounding through FE_FDIV_
+ * SINGLE's divu.l-based path too. Both pairs are already clean single
+ * values, so this is also bit-exact against true 68881 "compute full
+ * then round" semantics -- the realistic common case this fast path
+ * targets, not just internal self-consistency. Opcodes come from
+ * fsmul_probe.asm, in this fixed order.
+ */
+static void run_fsmul_probe(const struct image *img)
+{
+	static const char *names[6] = {
+		"fsmul.x fp1,fp0", "fsglmul.x fp1,fp0", "fmul.x fp1,fp0 (FPCR single)",
+		"fsdiv.x fp1,fp0", "fsgldiv.x fp1,fp0", "fdiv.x fp1,fp0 (FPCR single)",
+	};
+	const double mul_a = 16777215.0, mul_b = 3.0;
+	const double div_a = 7.0, div_b = 3.0;
+	double a, b, expected;
+	int i, done;
+	long cycles;
+	double got;
+
+	printf("\n=== fsmul/fsglmul/fsdiv/fsgldiv/FPCR-single probe (checklist #5) ===\n");
+	printf("%-30s %14s %10s  %s\n", "op", "cycles", "match", "note");
+
+	for (i = 0; i < 6; i++) {
+		if (i < 3) {
+			a = mul_a; b = mul_b;
+			expected = (double)((float)a * (float)b);
+		} else {
+			a = div_a; b = div_b;
+			expected = (double)((float)a / (float)b);
+		}
+		mem_put_extended(img->reg_fpn + 0, a);
+		mem_put_extended(img->reg_fpn + 12, b);
+		/* FPCR_SINGLE only for the plain fmul/fdiv rows (i==2, i==5) */
+		forced_fpcr_mode = (i == 2 || i == 5) ? 0x40 : 0x00;
+
+		cycles = run_one_opcode(img, (unsigned)i * 4, &done);
+		forced_fpcr_mode = 0;
+		if (!done) {
+			printf("%-30s %14s %10s  TIMEOUT after %d steps\n",
+			       names[i], "-", "-", MAX_STEPS);
+			continue;
+		}
+
+		got = mem_get_extended(img->reg_fpn + 0);
+		printf("%-30s %14ld %10s  %.17g vs %.17g\n", names[i], cycles,
+		       (got == expected) ? "MATCH" : "DIFFER", got, expected);
 	}
 }
 
@@ -627,6 +695,36 @@ int main(int argc, char **argv)
 		memcpy(mem + TEST_CODE, probe_ops, sizeof probe_ops);
 
 		run_fmove_probe(&img);
+	}
+
+	/* fsmul/fsglmul/FPCR-single probe for checklist #5. Same library
+	 * build as the fmove probe -- FE_FMUL_SINGLE never calls out to
+	 * mathieeedoubbas/trans either way.
+	 */
+	{
+		struct image img;
+		unsigned char probe_ops[6 * 4];
+		size_t fsize = 0, probe_size;
+		FILE *pf;
+
+		pf = fopen("build/fsmul_probe.bin", "rb");
+		if (!pf) { fprintf(stderr, "bench: build/fsmul_probe.bin missing -- run make first\n"); return 1; }
+		probe_size = fread(probe_ops, 1, sizeof probe_ops, pf);
+		fclose(pf);
+		if (probe_size != sizeof probe_ops) {
+			fprintf(stderr, "bench: build/fsmul_probe.bin has the wrong size (%zu bytes, expected %zu)\n",
+			        probe_size, sizeof probe_ops);
+			return 1;
+		}
+
+		memset(mem, 0, MEM_SIZE);
+		load_binary(variant_paths[0], 0, &fsize);
+		parse_image_header(&img);
+		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
+		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
+		memcpy(mem + TEST_CODE, probe_ops, sizeof probe_ops);
+
+		run_fsmul_probe(&img);
 	}
 
 	return 0;

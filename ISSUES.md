@@ -10,7 +10,7 @@
 | fcos | calls MathIeeeDoubTrans |
 | fcosh | calls MathIeeeDoubTrans |
 | fdbcc | optimal |
-| fdiv | set NOMATHLIB for native (slow, correct) 54-iteration division |
+| fdiv | set NOMATHLIB for native, `DIV64`-based (correct, but a 64+1-iteration restoring-division loop -- see checklist `#4`'s row) extended-precision division. `fsdiv`/`fsgldiv`/FPCR-forced-single now take a separate, much faster `divu.l`-based single-precision path (checklist `#5`, ~5x faster than the extended path) -- see `ISSUES.md`'s header note and `README.md`'s `#5` row for the narrowed-operand relaxation this accepts |
 | fetox | calls MathIeeeDoubTrans |
 | fgetexp | may have issues |
 | fgetman | doe not work at all |
@@ -23,7 +23,7 @@
 | fmovecr | optimal |
 | fmovefpcr | optimal |
 | fmovem | Native internal representation (checklist `#4`) removed the per-register `jsr` entirely for `.x` register lists -- `FMOVEMEAFPN`/`FMOVEMFPNEA` are now a straight `movem.l`, no conversion call, no more per-register cost multiplying the old rounding bug. This was the one clear, unambiguous win the whole idea was banking on (measured 1369-1457 -> 953 cycles for 4 registers) |
-| fmul | set NOMATHLIB for native, hardware-mulu.l-based, correctly-rounded code |
+| fmul | set NOMATHLIB for native, hardware-`mulu.l`-based, correctly-rounded extended-precision code. `fsmul`/`fsglmul`/FPCR-forced-single now take a separate, faster single-precision path (checklist `#5`, ~19% faster than the extended path) -- see `README.md`'s `#5` row for the narrowed-operand relaxation this accepts |
 | fneg | optimal |
 | frestore | optimal |
 | fsave | optimal |

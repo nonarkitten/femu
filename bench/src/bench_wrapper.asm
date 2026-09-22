@@ -18,10 +18,14 @@
 ;       mantissa -- checklist #4)
 ;   +12 MathIeeeDoubBasBase address (femu's own storage cell)
 ;   +16 MathIeeeDoubTransBase address (femu's own storage cell)
+;   +20 RegFpcrMode address (FPCR mode byte -- checklist #5's fsmul
+;       probe needs to force FPCR_SINGLE for the plain-fmul dispatch
+;       path, see src/utils/fpu.asm)
 ;
 	dc.l	$42454e31
 	dc.l	HandleException
 	dc.l	RegFpn
 	dc.l	MathIeeeDoubBasBase
 	dc.l	MathIeeeDoubTransBase
+	dc.l	RegFpcrMode
 	include	"femu.asm"
