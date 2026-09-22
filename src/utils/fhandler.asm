@@ -1,5 +1,36 @@
 ;
+; Checklist #7 ("trim the trap prologue/epilogue"): investigated, not
+; implemented -- the full d0-d7/a0-sp save below can't be safely narrowed
+; per-handler under the current addressing scheme. ea.asm's GETEAVALUE/
+; GetEa/ADDAN reach any of the 15 general registers by a *runtime*-computed
+; offset -- (OSTACKAN,STACKFRAME,dN.w), OSTACKAN/OSTACKDN fixed at -32/-64
+; from STACKFRAME below -- into exactly the frame this movem lays down, so
+; any FPU opcode with a memory operand can name any a0-a6/d0-d7 in its EA;
+; the save side can't be narrowed below the full set without already having
+; decoded the instruction that determines which register that is.
 ;
+; A narrower, real case does exist -- fadd/fsub/fmul/fdiv/fcmp/fabs/fneg/
+; ftst/fscale/fgetexp/fgetman (and their fs*/fd* precision-forced siblings,
+; same handler code) never touch a0/a2/a3/a6 in any of their own code or in
+; MOVEFPNTODN/MOVEDNTOFPN/SETCC/the FE_* math macros (audited by grep across
+; every src/ops/*.asm; all stay within d0-d6/a1) -- but only when the
+; instruction's source-specifier bit (bit 14) says "FPm register", not
+; memory; the same handler reached via the EA-to-reg path needs GetEa (a0)
+; and the full OSTACKAN image regardless of which op it is. It doesn't pay
+; for itself: movem.l -(sp) only reserves space for registers actually in
+; its list, so dropping a0/a2/a3/a6 from the transfer also shrinks the
+; frame -- but OSTACKAN/OSTACKDN index every register's slot by its fixed
+; 68K register number (STACKFRAME + OSTACKAN + regnum*4), so those four
+; slots still have to exist at their normal offsets for any later-in-the-
+; chain instruction (checklist #6) that does need them, or for
+; POSTHANDLEEXCEPTION's unconditional restore. Gap-filling the skipped
+; slots (e.g. subq.l #4,sp per register) to keep the fixed offsets intact
+; costs about what the move.l aN,-(sp) it replaces did -- the saving
+; evaporates once the frame's fixed-offset addressing is preserved, which
+; it must be for correctness. Real per-handler trimming needs that
+; addressing scheme itself to change (a fast EA path that doesn't need the
+; general OSTACKAN lookup for its own fixed-shape frame) -- that's #8's
+; territory, not this row's. See README.md's #7 row for the full writeup.
 ;
 PREHANDLEEXCEPTION macro
 
