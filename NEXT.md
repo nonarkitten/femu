@@ -66,15 +66,43 @@ algorithms in Python against golden vectors when `bench/` showed wrong
 (not just slow) results — faster to iterate on than round-tripping
 through the real assembler each time.
 
-`fdiv`'s cost is still dominated by a one-bit-at-a-time division loop —
-deliberately the simple-and-correct version, not the fast one (see
-`#1`'s row in `README.md`). A hardware-`divu.l`-seeded division
-algorithm is a good candidate for its own future checklist row, now
-more valuable than before given `#4`'s iteration-count increase.
+`fdiv`'s extended-precision path is still dominated by a one-bit-at-a-
+time division loop (`DIV64`) — deliberately the simple-and-correct
+version, not the fast one (see `#1`'s row in `README.md`). The
+hardware-`divu.l`-seeded algorithm flagged here as a good future idea
+landed as part of `#5` instead, scoped to the single-precision case
+(`FE_FDIV_SINGLE`) rather than replacing `DIV64` itself for extended
+precision — that's still open if a future row wants it.
 
-`#5` (single-precision fast path), `#9` (transcendental fast paths) and
-`#10` (native transcendentals, now unblocked — both its deps, `#1` and
-`#4`, are done) are all fair game next.
+`#5` (single-precision fast path) is done, scoped to `fmul`/`fdiv` (see
+its `README.md` row for the full writeup and measured numbers): `fsmul`/
+`fsglmul`/FPCR-forced-single `fmul` are ~19% faster than extended `fmul`
+(1149 → 957-976 cycles); `fsdiv`/`fsgldiv`/FPCR-forced-single `fdiv` are
+roughly **5x faster** than extended `fdiv` (5227-5722 → 1000-1019
+cycles) — the single biggest win of the checklist so far, and the "a
+lot faster" the user expected to offset `#4`'s `fdiv` regression.
+`fadd`/`fsub` single-precision paths were explicitly deferred (much
+smaller win there — `FE_FADD`/`FE_FSUB` are already O(1), not an
+iterative loop, so there's no `MUL64`/`DIV64`-class win to avoid), left
+as a candidate future row. Plain `fmul`/`fdiv` (extended, FPCR not
+forcing single) pay a flat +29-cycle tax now for the new runtime FPCR-
+precision dispatch check — an honest, unavoidable cost of adding the
+check to the hot path, not a regression in the underlying math.
+
+One real vasm bug and a narrower vasm quirk were found and worked
+around while wiring up `#5`'s dispatch (both fully described in the
+`#5` row, worth reading before writing another macro that's invoked
+more than once per file with an `ifnb`-gated call inside it): this
+build of vasm goes into unbounded memory allocation instead of a clean
+error when a macro that defines local labels is called from both
+branches of an `ifnb`/`else` inside another macro that itself gets
+invoked more than once in a file, and separately when the same
+`ifnb`-tested parameter is blank via a leading comma in one call site
+and blank via plain omission in another. Neither is `femu`-specific;
+both were reproduced in a few lines of standalone test `.asm`.
+
+`#9` (transcendental fast paths) and `#10` (native transcendentals, now
+unblocked — both its deps, `#1` and `#4`, are done) are fair game next.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

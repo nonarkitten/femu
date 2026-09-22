@@ -3,27 +3,27 @@
 op                 cycles      match  note
 fadd                  961      MATCH  3.3000000000000003 vs 3.3000000000000003
 fsub                  953      MATCH  69.899999999999991 vs 69.899999999999991
-fmul                 1149      MATCH  27.224999999999998 vs 27.224999999999998
-fmul                 1149      MATCH  -7 vs -7
-fmul                 1114      MATCH  3.6099999999999999 vs 3.6099999999999999
-fmul                 1149      MATCH  -123.456789 vs -123.456789
-fmul                 1149      MATCH  99.999999979999998 vs 99.999999979999998
-fdiv                 5476      MATCH  10.1 vs 10.1
-fdiv                 5693      MATCH  0.5 vs 0.5
-fdiv                 5467      MATCH  3.3333333330000001 vs 3.3333333330000001
-fdiv                 5227      MATCH  0.33333333333333331 vs 0.33333333333333331
-fdiv                 5693      MATCH  -2 vs -2
-fdiv                 5693      MATCH  25 vs 25
-fdiv                 5693      MATCH  1 vs 1
+fmul                 1178      MATCH  27.224999999999998 vs 27.224999999999998
+fmul                 1178      MATCH  -7 vs -7
+fmul                 1143      MATCH  3.6099999999999999 vs 3.6099999999999999
+fmul                 1178      MATCH  -123.456789 vs -123.456789
+fmul                 1178      MATCH  99.999999979999998 vs 99.999999979999998
+fdiv                 5505      MATCH  10.1 vs 10.1
+fdiv                 5722      MATCH  0.5 vs 0.5
+fdiv                 5496      MATCH  3.3333333330000001 vs 3.3333333330000001
+fdiv                 5256      MATCH  0.33333333333333331 vs 0.33333333333333331
+fdiv                 5722      MATCH  -2 vs -2
+fdiv                 5722      MATCH  25 vs 25
+fdiv                 5722      MATCH  1 vs 1
 fadd                  757      MATCH  inf vs inf
 fadd                  799      MATCH  inf vs inf
 fadd                  769      MATCH  5.5 vs 5.5
 fadd                  787      MATCH  5.5 vs 5.5
-fmul                  757      MATCH  inf vs inf
-fmul                  789      MATCH  0 vs 0
-fdiv                  847      MATCH  inf vs inf
-fdiv                  789      MATCH  0 vs 0
-fdiv                  757      MATCH  inf vs inf
+fmul                  786      MATCH  inf vs inf
+fmul                  818      MATCH  0 vs 0
+fdiv                  876      MATCH  inf vs inf
+fdiv                  818      MATCH  0 vs 0
+fdiv                  786      MATCH  inf vs inf
 fabs                  626      MATCH  5.5 vs 5.5
 fneg                  634      MATCH  -12.1 vs -12.1
 fint                  949      MATCH  3 vs 3 (stub)
@@ -49,27 +49,27 @@ ftanh                 932      MATCH  0.99999013835680184 vs 0.99999013835680184
 op                 cycles      match  note
 fadd                  961      MATCH  3.3000000000000003 vs 3.3000000000000003
 fsub                  953      MATCH  69.899999999999991 vs 69.899999999999991
-fmul                 1149      MATCH  27.224999999999998 vs 27.224999999999998
-fmul                 1149      MATCH  -7 vs -7
-fmul                 1114      MATCH  3.6099999999999999 vs 3.6099999999999999
-fmul                 1149      MATCH  -123.456789 vs -123.456789
-fmul                 1149      MATCH  99.999999979999998 vs 99.999999979999998
-fdiv                 5476      MATCH  10.1 vs 10.1
-fdiv                 5693      MATCH  0.5 vs 0.5
-fdiv                 5467      MATCH  3.3333333330000001 vs 3.3333333330000001
-fdiv                 5227      MATCH  0.33333333333333331 vs 0.33333333333333331
-fdiv                 5693      MATCH  -2 vs -2
-fdiv                 5693      MATCH  25 vs 25
-fdiv                 5693      MATCH  1 vs 1
+fmul                 1178      MATCH  27.224999999999998 vs 27.224999999999998
+fmul                 1178      MATCH  -7 vs -7
+fmul                 1143      MATCH  3.6099999999999999 vs 3.6099999999999999
+fmul                 1178      MATCH  -123.456789 vs -123.456789
+fmul                 1178      MATCH  99.999999979999998 vs 99.999999979999998
+fdiv                 5505      MATCH  10.1 vs 10.1
+fdiv                 5722      MATCH  0.5 vs 0.5
+fdiv                 5496      MATCH  3.3333333330000001 vs 3.3333333330000001
+fdiv                 5256      MATCH  0.33333333333333331 vs 0.33333333333333331
+fdiv                 5722      MATCH  -2 vs -2
+fdiv                 5722      MATCH  25 vs 25
+fdiv                 5722      MATCH  1 vs 1
 fadd                  757      MATCH  inf vs inf
 fadd                  799      MATCH  inf vs inf
 fadd                  769      MATCH  5.5 vs 5.5
 fadd                  787      MATCH  5.5 vs 5.5
-fmul                  757      MATCH  inf vs inf
-fmul                  789      MATCH  0 vs 0
-fdiv                  847      MATCH  inf vs inf
-fdiv                  789      MATCH  0 vs 0
-fdiv                  757      MATCH  inf vs inf
+fmul                  786      MATCH  inf vs inf
+fmul                  818      MATCH  0 vs 0
+fdiv                  876      MATCH  inf vs inf
+fdiv                  818      MATCH  0 vs 0
+fdiv                  786      MATCH  inf vs inf
 fabs                  626      MATCH  5.5 vs 5.5
 fneg                  634      MATCH  -12.1 vs -12.1
 fint                 1166      MATCH  3 vs 3
@@ -99,3 +99,12 @@ fmove.d (a0),fp0                    859       ok  got 1.5, want 1.5
 fmove.d fp0,(a0)                    769       ok  got 1.5, want 1.5
 fmovem.x (a0),fp0-fp3               953       ok  fp0-fp3 got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
 fmovem.x fp0-fp3,(a0)               953       ok  mem got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
+
+=== fsmul/fsglmul/fsdiv/fsgldiv/FPCR-single probe (checklist #5) ===
+op                                     cycles      match  note
+fsmul.x fp1,fp0                           957      MATCH  50331644 vs 50331644
+fsglmul.x fp1,fp0                         957      MATCH  50331644 vs 50331644
+fmul.x fp1,fp0 (FPCR single)              976      MATCH  50331644 vs 50331644
+fsdiv.x fp1,fp0                          1000      MATCH  2.3333332538604736 vs 2.3333332538604736
+fsgldiv.x fp1,fp0                        1000      MATCH  2.3333332538604736 vs 2.3333332538604736
+fdiv.x fp1,fp0 (FPCR single)             1019      MATCH  2.3333332538604736 vs 2.3333332538604736

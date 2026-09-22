@@ -239,6 +239,251 @@ DivRound	dc.b	0
 
 
 ;
+; Single-precision-forced divide (checklist #5): triggered by fsdiv/
+; fsgldiv or FPCR's rounding precision field, never silently -- same
+; deliberate, documented relaxation as FE_FMUL_SINGLE (round both
+; operands to a 24-bit significant mantissa FIRST, real 68881 fsdiv
+; computes at full extended precision and rounds only the final
+; result). This is the single biggest win #5 targets: DIV64's 64+1-
+; iteration restoring-division loop is replaced by one hardware
+; divu.l, at the cost of the same narrowed-operand relaxation
+; FE_FMUL_SINGLE already accepted.
+;
+; The 24-bit mantissas (dst24, src24, both in [2^23,2^24)) are divided
+; via a single 32-bit-quotient/32-bit-remainder divu.l: the 64-bit
+; scaled dividend dst24<<31 is built directly in the Dr:Dq pair (no
+; multi-word shift needed -- shifting a 32-bit register left by 31
+; naturally keeps only its bit0, which is exactly Dq's low half; Dr is
+; just dst24>>1). This is safe from quotient overflow for every
+; in-range dst24/src24 (worst case (2^24-1)*2^31/2^23 = 2^32-256,
+; verified exactly in Python, not just spot-checked) and needs no
+; iteration at all. Verified against an independent Fraction-exact
+; reference (0/300000 random cases + targeted operand-rounding-
+; overflow edge cases, which is also where a sign mistake would hide:
+; the DIVISOR's own rounding overflow subtracts 1 from the combined
+; exponent, not adds, unlike FE_FMUL_SINGLE's dst/src symmetry).
+;
+; d0 - destination sign(1):exponent(15):reserved(16) -> combined result
+;      exponent
+; d1 - destination mantissa hi32 -> rounded 24-bit dst mantissa -> Dq
+;      (low32 of the scaled dividend, then the divu.l quotient) ->
+;      result mantissa hi32 (after widening)
+; d2 - destination mantissa lo32 -> scratch (round/sticky) -> Dr
+;      (high32 of the scaled dividend, then the divu.l remainder,
+;      folded into sticky for the final rounding below)
+; d3 - source sign(1):exponent(15):reserved(16) -> scratch (exponent
+;      extraction) -> divisor (rounded src24) for divu.l -> scratch
+; d4 - source mantissa hi32 -> rounded 24-bit src mantissa (moved to
+;      d3 before the divide) -> free
+; d5 - source mantissa lo32 -> scratch (round/sticky)
+; d6 - scratch throughout (fast-path probe, Inf/NaN/zero probe, sign
+;      xor, shift count, quotient rounding candidate)
+; d7 - reserved
+;
+FE_FDIV_SINGLE macro
+
+	; Fast path / special-case ladder: identical to FE_FDIV's, see there
+	bfextu			d0{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.SglSpecialCase
+	bfextu			d3{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.SglSpecialCase
+	bra.w			.SglMainBody
+
+	.SglSpecialCase:
+	bfextu			d0{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.SglDstExpOk
+	bra.w			.SglDone
+	.SglDstExpOk:
+	bfextu			d3{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.SglSrcExpOk
+	move.l			d3,d0
+	move.l			d4,d1
+	move.l			d5,d2
+	bra.w			.SglDone
+	.SglSrcExpOk:
+
+	; Zero dividend -> zero (with the XOR'd sign)
+	bfextu			d0{1:15},d6
+	bne.s			.SglDstExpNoZ
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	moveq			#0,d1
+	moveq			#0,d2
+	move.l			d6,d0
+	bra.w			.SglDone
+	.SglDstExpNoZ:
+
+	; Zero divisor -> infinity (with the XOR'd sign)
+	bfextu			d3{1:15},d6
+	bne.s			.SglSrcExpNoZ
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	or.l			#$7fff0000,d6
+	move.l			#$80000000,d1
+	moveq			#0,d2
+	move.l			d6,d0
+	bra.w			.SglDone
+	.SglSrcExpNoZ:
+
+	.SglMainBody:
+	; Sign = XOR of the operand signs -- same as FE_FDIV
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	move.l			d6,DivSign
+
+	; Combined (biased) exponent, before the rounding adjustments below
+	bfextu			d0{1:15},d0
+	bfextu			d3{1:15},d3
+	sub.w			d3,d0
+	add.w			#16383,d0
+
+	; Round the destination mantissa (d1:d2, 64 bits) to a right-
+	; justified 24-bit value in d1 -- identical to FE_FMUL_SINGLE's dst
+	; rounding, see there. Overflow (all-ones rounds up past 24 bits)
+	; bumps d0 by +1: the dividend's own effective exponent went up.
+	btst			#7,d1
+	beq.s			.SglDstNoRoundUp
+	move.l			d1,d6
+	andi.l			#$7f,d6
+	bne.s			.SglDstRoundUp
+	tst.l			d2
+	bne.s			.SglDstRoundUp
+	btst			#8,d1
+	beq.s			.SglDstNoRoundUp
+	.SglDstRoundUp:
+	moveq			#1,d6
+	bra.s			.SglDstHaveRound
+	.SglDstNoRoundUp:
+	moveq			#0,d6
+	.SglDstHaveRound:
+	lsr.l			#8,d1
+	add.l			d6,d1
+	cmp.l			#$1000000,d1
+	blt.s			.SglDstRoundDone
+	move.l			#$800000,d1
+	addq.w			#1,d0
+	.SglDstRoundDone:
+
+	; Same for the source mantissa (d4:d5 -> d4). Overflow SUBTRACTS 1
+	; from d0 instead of adding: the divisor's effective exponent going
+	; up by one means the quotient's exponent goes DOWN by one -- the
+	; sign flip that makes this different from FE_FMUL_SINGLE, verified
+	; explicitly against the Fraction-exact reference (see header).
+	btst			#7,d4
+	beq.s			.SglSrcNoRoundUp
+	move.l			d4,d6
+	andi.l			#$7f,d6
+	bne.s			.SglSrcRoundUp
+	tst.l			d5
+	bne.s			.SglSrcRoundUp
+	btst			#8,d4
+	beq.s			.SglSrcNoRoundUp
+	.SglSrcRoundUp:
+	moveq			#1,d6
+	bra.s			.SglSrcHaveRound
+	.SglSrcNoRoundUp:
+	moveq			#0,d6
+	.SglSrcHaveRound:
+	lsr.l			#8,d4
+	add.l			d6,d4
+	cmp.l			#$1000000,d4
+	blt.s			.SglSrcRoundDone
+	move.l			#$800000,d4
+	subq.w			#1,d0
+	.SglSrcRoundDone:
+
+	; Build the 64-bit scaled dividend Dr:Dq = dst24 << 31 in d2:d1 --
+	; Dq (d1, the low 32 bits) is just dst24 shifted left 31 within one
+	; register (everything above bit0 shifts out, which is exactly what
+	; the low half of a 64-bit left-shift-by-31 needs); Dr (d2, the
+	; high 32 bits) is dst24>>1. d3 (holding the now-unneeded source
+	; exponent) becomes the divisor register once src24 (in d4) moves
+	; in.
+	move.l			d1,d2
+	lsr.l			#1,d2
+	moveq			#31,d6
+	lsl.l			d6,d1
+	move.l			d4,d3
+
+	; One hardware divide replaces DIV64's 64+1-iteration loop.
+	divu.l			d3,d2:d1
+
+	; Two fixed cases based on the quotient's top bit (mirrors FE_FDIV's
+	; Lead0/Lead1 split) -- d2 (remainder) folds into sticky either way,
+	; same role DIV64's own remainder played.
+	btst			#31,d1
+	beq.s			.SglLead0
+
+	.SglLead1:
+	move.l			d1,d6
+	lsr.l			#8,d6
+	btst			#7,d1
+	beq.s			.SglL1NoRoundUp
+	move.l			d1,d3
+	andi.l			#$7f,d3
+	bne.s			.SglL1RoundUp
+	tst.l			d2
+	bne.s			.SglL1RoundUp
+	btst			#0,d6
+	beq.s			.SglL1NoRoundUp
+	.SglL1RoundUp:
+	addq.l			#1,d6
+	.SglL1NoRoundUp:
+	bra.s			.SglRoundedDone
+
+	.SglLead0:
+	subq.w			#1,d0
+	move.l			d1,d6
+	lsr.l			#7,d6
+	btst			#6,d1
+	beq.s			.SglL0NoRoundUp
+	move.l			d1,d3
+	andi.l			#$3f,d3
+	bne.s			.SglL0RoundUp
+	tst.l			d2
+	bne.s			.SglL0RoundUp
+	btst			#0,d6
+	beq.s			.SglL0NoRoundUp
+	.SglL0RoundUp:
+	addq.l			#1,d6
+	.SglL0NoRoundUp:
+
+	.SglRoundedDone:
+	; d6 = rounded 24-bit mantissa candidate; overflow past 24 bits
+	; (all-ones rounded up) handled the same way as everywhere else.
+	cmp.l			#$1000000,d6
+	blt.s			.SglQuotRoundDone
+	move.l			#$800000,d6
+	addq.w			#1,d0
+	.SglQuotRoundDone:
+
+	; Widen the 24-bit result mantissa back to the 64-bit storage
+	; convention (see FE_FMUL_SINGLE's identical step)
+	move.l			d6,d1
+	lsl.l			#8,d1
+	moveq			#0,d2
+
+	; Construct result word0
+	lsl.l			#8,d0
+	lsl.l			#8,d0
+	move.l			DivSign,d6
+	or.l			d6,d0
+
+	.SglDone:
+
+endm
+
+
+;
 ;
 ;
 FDIVHANDLER macro
@@ -256,8 +501,27 @@ FDIVHANDLER macro
 	GETREGISTER		d6
 	MOVEFPNTODN		d6,d0,d1,d2
 
-	; Emulate instruction
-	FE_FDIV
+	; Emulate instruction. \1 non-blank (passed as a bare "single"
+	; token, never a leading-comma-blank -- see FMULHANDLER's comment
+	; in fmul.asm for the vasm parser bug that mixing blank forms of
+	; the same ifnb'd parameter across two calls in one file triggers)
+	; means fsdiv/fsgldiv: always force the single-precision fast path,
+	; no runtime check needed. Plain fdiv/fddiv instead honor FPCR's
+	; rounding precision field (checklist #5), same dispatch shape as
+	; FMULHANDLER.
+	ifnb \1
+		FE_FDIV_SINGLE
+	else
+		move.b			RegFpcrMode,d6
+		andi.b			#FPCR_PRECMASK,d6
+		cmp.b			#FPCR_SINGLE,d6
+		beq.w			.UseSingle
+		FE_FDIV
+		bra.w			.DivDone
+		.UseSingle:
+		FE_FDIV_SINGLE
+		.DivDone:
+	endif
 
 	; Write results
 	GETREGISTER		d6
@@ -270,12 +534,12 @@ endm
 
 
 ;
-; fdiv emulation
+; fdiv/fddiv emulation -- full extended computation, single-rounded
+; only when FPCR's precision field asks for it (checked at runtime
+; above).
 ;
 FdivHandler
-FsdivHandler
 FddivHandler
-FsgldivHandler
 	FDIVHANDLER
 	rts
 
@@ -284,3 +548,16 @@ FsgldivHandler
 	dc.b 			"fdiv %08lx",10,0
 	even
 const_025:	dc.l	$3fd00000,$0
+
+;
+; fsdiv/fsgldiv emulation -- checklist #5's narrowed-operand fast path
+; is forced unconditionally, since the opcode itself asks for single
+; precision (no FPCR check needed, see FDIVHANDLER's \1 parameter).
+;
+FsdivHandler
+FsgldivHandler
+	FDIVHANDLER		single
+	rts
+	.DEBUGOP:
+	dc.b 			"fsdiv %08lx",10,0
+	even

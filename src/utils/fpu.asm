@@ -39,11 +39,18 @@ CCN					equ		$08
 ;
 ; flags in the FPCR mode byte
 ;
-FPCR_ROUNDMASK		EQU	$30	
+FPCR_ROUNDMASK		EQU	$30
 FPCR_NATURAL		EQU	$00	;after masking: $00 - round to nearest (0.5 = up)
 FPCR_RZ				EQU	$10	;after masking: $10 - round to zero
 FPCR_FLOOR			EQU	$20	;after masking: $20 - round to -infinity
 FPCR_CEIL			EQU	$30	;after masking: $30 - round to +infinity
+
+; rounding PRECISION field (bits 7-6, distinct from the rounding MODE
+; field above) -- checklist #5's single-precision fast path trigger
+FPCR_PRECMASK		EQU	$C0
+FPCR_EXTENDED		EQU	$00	;after masking: $00 - extended (80-bit) precision
+FPCR_SINGLE			EQU	$40	;after masking: $40 - round every result to single
+FPCR_DOUBLE			EQU	$80	;after masking: $80 - round every result to double
 
 
 ;
