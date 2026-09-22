@@ -34,6 +34,22 @@
 #define STUB_ILLEGAL    0x4AFCu       /* ILLEGAL opcode, used to mark stub slots */
 #define LIB_REGION_SIZE 0x100u        /* bytes of ILLEGAL-filled region per library */
 
+/* Checklist #6 (opcode chaining): HandleException now peeks at the word
+ * right after the opcode it just emulated and, if that word also looks
+ * like an F-line opcode, keeps going instead of rte-ing straight back.
+ * Every single-opcode probe in this file (the main vector loop,
+ * run_fmove_probe, run_fsmul_probe) packs its 4-byte test opcodes back to
+ * back with no gap -- fine before #6, since only a real CPU re-trap could
+ * ever pull in the next slot's bytes, but with #6 landed the *next real
+ * opcode in memory* is exactly the kind of neighbor that check is looking
+ * for, so an isolated single-op test would silently chain into whatever
+ * happens to sit right after it and never reach its own resume_pc. Each
+ * 4-byte test opcode is placed SLOT_STRIDE bytes apart instead, with the
+ * gap left zeroed (a non-F-line word) so the peek always sees a clean
+ * stop right after the opcode under test, chaining active or not.
+ */
+#define SLOT_STRIDE     8u
+
 static uint8_t mem[MEM_SIZE];
 
 static void oob(const char *what, unsigned addr)
@@ -314,6 +330,19 @@ static void fill_illegal(unsigned base, unsigned size)
 		m68k_write_memory_16(a, STUB_ILLEGAL);
 }
 
+/* Places n 4-byte opcodes (packed tightly in src, one per vasm source row --
+ * ops.asm/fmove_probe.asm/fsmul_probe.asm's convention) into mem starting at
+ * base, SLOT_STRIDE bytes apart instead of 4 -- see SLOT_STRIDE's comment.
+ * The gap between slots is left however memset last set it, so callers must
+ * memset(mem, 0, ...) beforehand.
+ */
+static void load_slotted_opcodes(unsigned base, const unsigned char *src, int n)
+{
+	int i;
+	for (i = 0; i < n; i++)
+		memcpy(mem + base + (unsigned)i * SLOT_STRIDE, src + i * 4, 4);
+}
+
 /* ---- golden vectors ---------------------------------------------------- */
 struct vector {
 	char op[16];
@@ -373,10 +402,11 @@ static double reference(const char *op, double a, double b)
 
 #define MAX_STEPS 500000
 
-/* Runs one 4-byte opcode already placed at TEST_CODE+offset and returns
- * cycles taken, or -1 on timeout. Registers/memory must already be set
- * up by the caller; this only resets the CPU and (re)installs the
- * vector table/library bases, same as the main vector loop.
+/* Runs one 4-byte opcode already placed at TEST_CODE+slot*SLOT_STRIDE
+ * (see load_slotted_opcodes) and returns cycles taken, or -1 on timeout.
+ * Registers/memory must already be set up by the caller; this only resets
+ * the CPU and (re)installs the vector table/library bases, same as the
+ * main vector loop.
  */
 /* Set by a caller right before run_one_opcode when it needs the plain
  * fmul/fdmul dispatch to take FE_FMUL_SINGLE's runtime FPCR check
@@ -386,9 +416,9 @@ static double reference(const char *op, double a, double b)
  */
 static unsigned char forced_fpcr_mode;
 
-static long run_one_opcode(const struct image *img, unsigned offset, int *done_out)
+static long run_one_opcode(const struct image *img, unsigned slot, int *done_out)
 {
-	unsigned test_pc = TEST_CODE + offset, resume_pc = test_pc + 4;
+	unsigned test_pc = TEST_CODE + slot * SLOT_STRIDE, resume_pc = test_pc + 4;
 	long total_cycles = 0;
 	int step;
 
@@ -470,7 +500,7 @@ static void run_fmove_probe(const struct image *img)
 			break;
 		}
 
-		cycles = run_one_opcode(img, (unsigned)i * 4, &done);
+		cycles = run_one_opcode(img, (unsigned)i, &done);
 		if (!done) {
 			printf("%-24s %14s %8s  TIMEOUT after %d steps%s\n",
 			       names[i], "-", "-", MAX_STEPS, stub_hit ? " (stub)" : "");
@@ -558,7 +588,7 @@ static void run_fsmul_probe(const struct image *img)
 		/* FPCR_SINGLE only for the plain fmul/fdiv rows (i==2, i==5) */
 		forced_fpcr_mode = (i == 2 || i == 5) ? 0x40 : 0x00;
 
-		cycles = run_one_opcode(img, (unsigned)i * 4, &done);
+		cycles = run_one_opcode(img, (unsigned)i, &done);
 		forced_fpcr_mode = 0;
 		if (!done) {
 			printf("%-30s %14s %10s  TIMEOUT after %d steps\n",
@@ -568,6 +598,88 @@ static void run_fsmul_probe(const struct image *img)
 
 		got = mem_get_extended(img->reg_fpn + 0);
 		printf("%-30s %14ld %10s  %.17g vs %.17g\n", names[i], cycles,
+		       (got == expected) ? "MATCH" : "DIFFER", got, expected);
+	}
+}
+
+/* Checklist #6's opcode-chaining probe: real, back-to-back F-line
+ * opcodes with no padding between them at all (chain_probe.asm) -- the
+ * opposite of every other probe in this file, which goes out of its way
+ * (load_slotted_opcodes) to keep neighboring opcodes from being mistaken
+ * for a chain. Rows are different lengths on purpose (a chain of 2 vs.
+ * 3 vs. one op followed by ordinary code aren't the same size), so each
+ * row is copied fresh into the same TEST_CODE address rather than reusing
+ * load_slotted_opcodes' fixed stride. "cycles" is the total for the WHOLE
+ * row through the one final rte -- compare it against N times that op's
+ * standalone cost from the main vector loop above to see what chaining
+ * saved on N-1 avoided trap exits/re-entries. Row 3 (fadd immediately
+ * followed by a real `nop`) is the regression check: its resume_pc is
+ * only 4 bytes past test_pc, same as an ordinary standalone fadd, proving
+ * the chain stops instead of misreading `nop` as another FPU opcode.
+ */
+static void run_chain_probe(const struct image *img, const unsigned char *probe_ops, size_t probe_size)
+{
+	static const struct { const char *name; unsigned file_off, copy_len, resume_len; } rows[4] = {
+		{ "fadd,fadd (chain of 2)",        0,  8,  8 },
+		{ "fadd,fmul (chain of 2)",        8,  8,  8 },
+		{ "fadd,fadd,fadd (chain of 3)",  16, 12, 12 },
+		{ "fadd,nop (must NOT chain)",     28,  6,  4 },
+	};
+	const double a = 2.0, b = 3.0;
+	int i, done;
+
+	printf("\n=== opcode-chaining probe (checklist #6) ===\n");
+	printf("%-30s %14s %10s  %s\n", "op", "cycles", "match", "note");
+
+	for (i = 0; i < 4; i++) {
+		unsigned test_pc = TEST_CODE, resume_pc;
+		long total_cycles = 0;
+		int step;
+		double got, expected;
+
+		if (rows[i].file_off + rows[i].copy_len > probe_size) {
+			fprintf(stderr, "bench: chain_probe.bin too small for row %d\n", i);
+			exit(1);
+		}
+		memcpy(mem + TEST_CODE, probe_ops + rows[i].file_off, rows[i].copy_len);
+		resume_pc = test_pc + rows[i].resume_len;
+
+		m68k_pulse_reset();
+		m68k_set_reg(M68K_REG_VBR, VEC_BASE);
+		wr_long(VEC_BASE + 0x2c, img->handle_exception);
+		m68k_set_reg(M68K_REG_A7, SSP_INIT);
+		m68k_set_reg(M68K_REG_SR, 0x2700);
+		wr_long(img->bas_base_var, BAS_LIB_BASE);
+		wr_long(img->trans_base_var, TRANS_LIB_BASE);
+		mem_put_extended(img->reg_fpn + 0, a);
+		mem_put_extended(img->reg_fpn + 12, b);
+		m68k_set_reg(M68K_REG_PC, test_pc);
+
+		stub_hit = 0;
+		done = 0;
+		for (step = 0; step < MAX_STEPS; step++) {
+			total_cycles += m68k_execute(1);
+			if (m68k_get_reg(NULL, M68K_REG_PC) == resume_pc &&
+			    m68k_get_reg(NULL, M68K_REG_A7) == SSP_INIT) {
+				done = 1;
+				break;
+			}
+		}
+
+		if (!done) {
+			printf("%-30s %14s %10s  TIMEOUT after %d steps\n",
+			       rows[i].name, "-", "-", MAX_STEPS);
+			continue;
+		}
+
+		got = mem_get_extended(img->reg_fpn + 0);
+		switch (i) {
+		case 0: expected = a + b + b; break;      /* fadd, fadd */
+		case 1: expected = (a + b) * b; break;     /* fadd, fmul */
+		case 2: expected = a + b + b + b; break;   /* fadd, fadd, fadd */
+		default: expected = a + b; break;          /* fadd, nop -- nop never runs */
+		}
+		printf("%-30s %14ld %10s  %.17g vs %.17g\n", rows[i].name, total_cycles,
 		       (got == expected) ? "MATCH" : "DIFFER", got, expected);
 	}
 }
@@ -617,13 +729,13 @@ int main(int argc, char **argv)
 		parse_image_header(&img);
 		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
 		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
-		memcpy(mem + TEST_CODE, ops, ops_size);
+		load_slotted_opcodes(TEST_CODE, ops, nvec);
 
 		printf("\n=== %s ===\n", variant_names[variant]);
 		printf("%-10s %14s %10s  %s\n", "op", "cycles", "match", "note");
 
 		for (vi = 0; vi < nvec; vi++) {
-			unsigned test_pc = TEST_CODE + vi * 4;
+			unsigned test_pc = TEST_CODE + (unsigned)vi * SLOT_STRIDE;
 			unsigned resume_pc = test_pc + 4;
 			long total_cycles = 0;
 			int step, done = 0;
@@ -692,7 +804,7 @@ int main(int argc, char **argv)
 		parse_image_header(&img);
 		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
 		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
-		memcpy(mem + TEST_CODE, probe_ops, sizeof probe_ops);
+		load_slotted_opcodes(TEST_CODE, probe_ops, 6);
 
 		run_fmove_probe(&img);
 	}
@@ -722,9 +834,33 @@ int main(int argc, char **argv)
 		parse_image_header(&img);
 		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
 		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
-		memcpy(mem + TEST_CODE, probe_ops, sizeof probe_ops);
+		load_slotted_opcodes(TEST_CODE, probe_ops, 6);
 
 		run_fsmul_probe(&img);
+	}
+
+	/* Opcode-chaining probe for checklist #6. Same library build as the
+	 * other two probes; chaining itself doesn't touch the library-call
+	 * paths.
+	 */
+	{
+		struct image img;
+		unsigned char probe_ops[64];
+		size_t fsize = 0, probe_size;
+		FILE *pf;
+
+		pf = fopen("build/chain_probe.bin", "rb");
+		if (!pf) { fprintf(stderr, "bench: build/chain_probe.bin missing -- run make first\n"); return 1; }
+		probe_size = fread(probe_ops, 1, sizeof probe_ops, pf);
+		fclose(pf);
+
+		memset(mem, 0, MEM_SIZE);
+		load_binary(variant_paths[0], 0, &fsize);
+		parse_image_header(&img);
+		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
+		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
+
+		run_chain_probe(&img, probe_ops, probe_size);
 	}
 
 	return 0;

@@ -50,6 +50,18 @@ which is gitignored (fully regenerable, nothing there is source).
    library's `jsr` would. **Cycles spent inside a stubbed call are not
    counted** — there's no real 68k code executing for them — and any
    vector whose run touched a stub is marked `(stub)` in the report.
+6. **Opcode isolation (checklist `#6`).** Since `HandleException` can now
+   chain straight from one F-line opcode into the next in memory without
+   `rte`-ing in between, every single-opcode probe places its 4-byte test
+   opcodes `SLOT_STRIDE` (8) bytes apart in target memory instead of
+   packing them tightly, leaving the gap zeroed (not F-line) so the
+   chaining peek always sees a clean stop right after the opcode actually
+   under test — `load_slotted_opcodes()` in `harness.c`. Without this, a
+   densely-packed probe would silently chain into (and mis-time) its
+   neighbor's opcode. `src/chain_probe.asm` + `run_chain_probe()` are the
+   exception: they deliberately place real opcodes with **no** gap, since
+   proving the chain actually fires (and stops where it should) is the
+   whole point of that probe.
 
 ## Reading a report
 

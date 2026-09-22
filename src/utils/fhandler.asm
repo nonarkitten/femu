@@ -108,9 +108,31 @@ endm
 ;
 ; Exception handler.
 ;
+; Checklist #6: opcode chaining. Every handler already advances FAULTPC
+; past its own opcode/extension/EA words (see e.g. FaddHandler's
+; INREMENTPC) before rts-ing back here, so once EmulateInstruction
+; returns, (FAULTPC) is exactly the next instruction the CPU would fetch
+; after our eventual rte. If that next word also looks like an F-line
+; (coprocessor) opcode -- the same test the CPU itself would have used to
+; decide whether to trap here again -- decode and run it directly instead
+; of paying rte + a fresh trap entry for it. Falls through to the normal
+; POSTHANDLEEXCEPTION/rte the first time the next instruction isn't one of
+; ours, so a non-FPU instruction (or the end of a run of them) is handled
+; exactly as before.
+;
 HandleException
 	PREHANDLEEXCEPTION
+	.ChainLoop:
 	jsr EmulateInstruction
+
+	; Peek the next instruction (opcode word + one extension word, same
+	; two-word fetch PREHANDLEEXCEPTION did for the first one) and check
+	; its top nibble for the F-line pattern.
+	move.l		(FAULTPC),INSTRUCTION
+	bfextu		INSTRUCTION{0:4},d0
+	cmp.b		#$f,d0
+	beq.s		.ChainLoop
+
 	POSTHANDLEEXCEPTION
 
 

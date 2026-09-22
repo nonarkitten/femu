@@ -101,8 +101,30 @@ invoked more than once in a file, and separately when the same
 and blank via plain omission in another. Neither is `femu`-specific;
 both were reproduced in a few lines of standalone test `.asm`.
 
-`#9` (transcendental fast paths) and `#10` (native transcendentals, now
-unblocked — both its deps, `#1` and `#4`, are done) are fair game next.
+`#6` (opcode chaining) is done: `HandleException` (`src/utils/fhandler.asm`)
+now loops back into `EmulateInstruction` directly when the instruction word
+right after the one it just emulated is also F-line, skipping `rte` +
+re-trap for it. Real, measured win on back-to-back FPU code — two chained
+`fadd`s 1904→1661 cycles (−243), three chained 2853→2345 (−508, ~2× the
+pair's saving, since it skips two trap exits) — at a flat +22-cycle tax on
+every op that *doesn't* chain (verified: every single existing benchmark
+row, extended and single-precision alike, moved by exactly +22 and nothing
+else changed). See `README.md`'s `#6` row for the full writeup, including
+one interrupt-latency tradeoff worth knowing (a long chain holds interrupts
+masked for its whole length, not just one opcode — not gated behind a flag,
+same as real 68881 hardware, but a real cost for interrupt-sensitive code).
+A real harness bug was found and fixed along the way, worth knowing before
+writing another probe: every existing single-opcode bench probe packed its
+test opcodes 4 bytes apart with nothing in between, relying on a *real* CPU
+re-trap to naturally stop measurement at the right point — harmless before
+chaining existed, but once `HandleException` can peek past one opcode into
+the next, a densely-packed probe would silently chain into (and mis-time)
+its neighbor. Fixed via `SLOT_STRIDE` (`bench/src/harness.c`): opcodes
+under test are now placed 8 bytes apart with a zeroed (non-F-line) gap
+between them; verified this doesn't change a single existing number. `#7`
+(depends on `0, 6`, both now done) is unblocked; `#9` (transcendental fast
+paths) and `#10` (native transcendentals, deps `#1`/`#4` done) remain fair
+game too.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed
