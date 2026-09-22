@@ -1,8 +1,19 @@
 ;
 ; FPU registers.
 ;
+; Native 68881/68882 extended layout, 12 bytes/register (checklist #4):
+; word0 = sign(1):exponent(15, bias 16383), word1 = reserved (always 0),
+; word2/word3 = 64-bit mantissa with an EXPLICIT integer bit at bit 63
+; (no hidden-bit convention, unlike the IEEE double this replaced) --
+; see DESIGN-04-native-extended-repr.md. As a register triple (d0/d1/d2)
+; this is: d0 = sign+exponent+reserved, d1 = mantissa hi32, d2 = mantissa
+; lo32. fmove.x/fmovem.x's real 68881 memory format is byte-identical to
+; this, so that direction is now a straight movem.l with zero conversion.
 	ifnd FPN080
-RegFpn				dc.l	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+RegFpn				dc.l	0,0,0, 0,0,0, 0,0,0, 0,0,0
+					dc.l	0,0,0, 0,0,0, 0,0,0, 0,0,0
+					dc.l	0,0,0, 0,0,0, 0,0,0, 0,0,0
+					dc.l	0,0,0, 0,0,0, 0,0,0, 0,0,0
 	endif
 RegFpcrReserved		dc.w	0
 RegFpcrEnable		dc.b	0

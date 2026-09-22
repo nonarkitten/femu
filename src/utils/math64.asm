@@ -17,6 +17,32 @@ FAKE64 macro
 	.\@Ok:
 endm
 
+
+;
+; Converts an extended-format (checklist #4) value into a 'fake' 96-bit
+; integer -- same ordering-preserving trick as FAKE64, just one limb
+; wider (sign+exponent+reserved, mantissa hi, mantissa lo).
+;
+; INPUTS
+;	\1 -- Sign(1):exponent(15):reserved(16).
+;	\2 -- Mantissa bits 63-32.
+;	\3 -- Mantissa bits 31-0.
+;
+; RESULT
+;	\1 -- Sign(1):exponent(15):reserved(16).
+;	\2 -- Mantissa bits 63-32.
+;	\3 -- Mantissa bits 31-0.
+;
+FAKE96 macro
+	btst			#31,\1
+	beq.s			.\@Ok
+	eor.l			#$7FFFFFFF,\1
+	eor.l			#$FFFFFFFF,\2
+	eor.l			#$FFFFFFFF,\3
+	.\@Ok:
+endm
+
+
 ;
 ; Checks if value is INF or NAN
 ;
@@ -28,6 +54,25 @@ ISNAN macro
 	bgt.s			\2
 	cmp.l			#$FFF00000,\1
 	bls.s			\2
+endm
+
+
+;
+; Checks if an extended-format (checklist #4) value is INF or NAN. The
+; reserved word (low 16 bits of \1) is always 0, so unlike ISNAN's
+; double-format range check (which had to account for fraction bits
+; sharing the same register as the exponent), the exponent-all-ones
+; pattern has exactly one bit-exact value per sign -- a plain equality
+; check, non-destructive, no scratch register needed.
+;
+; INPUTS
+;	\1 -- Sign(1):exponent(15):reserved(16)
+;   \2 -- Branch if INF or NAN
+ISNAN96 macro
+	cmp.l			#$7fff0000,\1
+	beq.w			\2
+	cmp.l			#$ffff0000,\1
+	beq.w			\2
 endm
 
 ;
@@ -65,6 +110,30 @@ endm
 SUB64 macro
 	sub.l			\2,\4
 	subx.l			\1,\3
+endm
+
+
+;
+; Performs 96 bit sub -- same low-to-high subx chain as SUB64, one limb
+; wider, for extended-format (checklist #4) fcmp.
+;
+; INPUTS
+;	\1 -- High bits.
+;	\2 -- Mid bits.
+;	\3 -- Low bits.
+;	\4 -- High bits.
+;	\5 -- Mid bits.
+;	\6 -- Low bits.
+;
+; RESULT
+;	\4 -- High bits of (\4:\5:\6) - (\1:\2:\3).
+;	\5 -- Mid bits.
+;	\6 -- Low bits.
+;
+SUB96 macro
+	sub.l			\3,\6
+	subx.l			\2,\5
+	subx.l			\1,\4
 endm
 
 
@@ -190,33 +259,51 @@ MulOperands	dc.l	0,0,0,0
 
 
 ;
-; Performs an unsigned 64-bit division, computing Q = floor(R * 2^54 / V)
-; via 54 iterations of restoring binary division (shift both R and Q
-; left, try R -= V, keep the subtraction and set the new quotient bit
-; if it didn't borrow, else undo it).
+; Performs an unsigned 64-bit division via \7 iterations of restoring
+; binary division (shift both R and Q left, try R -= V, keep the
+; subtraction and set the new quotient bit if it didn't borrow, else
+; undo it).
 ;
 ; INPUTS
-;	\1:\2 -- R, the dividend, high:low. Must be < 2*V (true here since
-;	         both operands are 53-bit mantissas in [2^52,2^53)).
+;	\1:\2 -- R, the dividend, high:low. Must be < V.
 ;	\3:\4 -- V, the divisor, high:low. Must be nonzero.
 ;	\5:\6 -- Q, the quotient accumulator. Must be zeroed by the caller.
+;	\7 -- Iteration count (immediate, 1-255).
 ;
 ; RESULT
 ;	\1:\2 -- The final remainder. Nonzero means the division was inexact
 ;	         (needed for correct rounding).
-;	\5:\6 -- The quotient, up to 55 significant bits, right-justified.
+;	\5:\6 -- The quotient, \7 significant bits, right-justified.
 ;
 ; This is not the fast version -- seeding it from a hardware 32-bit
-; divide instead of 54 one-bit-at-a-time steps is a fair candidate for
-; a later, separately measured idea (see BENCHMARK.md). Uses DivCounter
+; divide instead of one-bit-at-a-time steps is a fair candidate for a
+; later, separately measured idea (see BENCHMARK.md). Uses DivCounter
 ; (1 byte of scratch memory) as the loop counter so every data register
 ; stays free for R/V/Q.
 ;
+; The R<V invariant bounds 2R to strictly less than 2V, which stayed
+; safely inside a 64-bit register pair back when this only served
+; 53-bit double mantissas (V < 2^53, so 2R < 2^54 -- 10 bits of
+; headroom). Checklist #4's full-width 64-bit extended mantissas have
+; none: V can be anywhere in [2^63,2^64), so 2R can genuinely need a
+; 65th bit that \1:\2 cannot represent on its own. Rather than widen the
+; accumulator, this relies on the fact that IF the doubling overflows
+; (the bit shifted off \1's top is a real, not phantom, 65th bit), the
+; true (65-bit) remainder is unconditionally >= any 64-bit V -- so that
+; iteration's quotient bit is 1 without needing to test it, and the
+; ordinary 64-bit subtraction that follows (\1:\2 -= \3:\4, discarding
+; whatever borrow it reports) already lands on the exact correct
+; remainder: true_2R - V = 2^64 + (2R mod 2^64) - V, and since the
+; result is proven < V < 2^64, that's exactly (2R mod 2^64) - V computed
+; modulo 2^64, i.e. plain wraparound subtraction, no correction needed.
+;
 DIV64 macro
-	move.b		#54,DivCounter
+	move.b		#\7,DivCounter
 	.\@Loop:
 	lsl.l		#1,\2
 	roxl.l		#1,\1
+	bcs.s		.\@Overflowed
+
 	lsl.l		#1,\6
 	roxl.l		#1,\5
 	sub.l		\4,\2
@@ -227,6 +314,15 @@ DIV64 macro
 	bra.s		.\@Next
 	.\@Bit1:
 	addq.l		#1,\6
+	bra.s		.\@Next
+
+	.\@Overflowed:
+	lsl.l		#1,\6
+	roxl.l		#1,\5
+	sub.l		\4,\2
+	subx.l		\3,\1
+	addq.l		#1,\6
+
 	.\@Next:
 	subq.b		#1,DivCounter
 	bne.s		.\@Loop

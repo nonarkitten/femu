@@ -13,7 +13,9 @@
 ; Layout (big-endian longwords, matching the harness's own reads):
 ;   +0  'BEN1' magic (sanity check)
 ;   +4  HandleException address
-;   +8  RegFpn address (16 FP registers x 8 bytes, IEEE double)
+;   +8  RegFpn address (16 FP registers x 12 bytes, native 68881
+;       extended: sign+exponent(15)+reserved word, 64-bit explicit-bit
+;       mantissa -- checklist #4)
 ;   +12 MathIeeeDoubBasBase address (femu's own storage cell)
 ;   +16 MathIeeeDoubTransBase address (femu's own storage cell)
 ;

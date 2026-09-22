@@ -1,89 +1,101 @@
 ;
-; d0 - destination high -> dividend fraction high -> remainder high -> result high
-; d1 - destination low  -> remainder low
-; d2 - source high -> divisor fraction high
-; d3 - source low
-; d4 - destination exponent -> combined result exponent
-; d5 - source exponent -> quotient high (DIV64)
-; d6 - scratch -> quotient low (DIV64) -> sticky flag
+; Extended format (checklist #4: 15-bit exponent, explicit 64-bit
+; mantissa). See FE_FADD's header comment for the register-pressure
+; reasoning behind d0/d3 staying untouched through the special-case
+; ladder, and sign/exponent extraction being deferred to .MainBody.
+;
+; Unlike FE_FADD/FE_FMUL, the division itself needs every register:
+; DIV64 needs R (2), V (2) and a fresh Q (2) simultaneously -- 6
+; registers, plus d0 for the exponent is exactly d0-d6. This is also
+; why DivSign/DivLead/DivRound (memory scratch, 1 longword/2 bytes) are
+; used liberally below rather than trying to free a register for them,
+; the same technique FE_FMUL's MulSign and this op's own predecessor
+; already relied on.
+;
+; d0 - destination sign(1):exponent(15):reserved(16) -> combined result
+;      exponent
+; d1 - destination mantissa hi32 -> dividend/remainder high (DIV64) ->
+;      result mantissa hi32
+; d2 - destination mantissa lo32 -> dividend/remainder low (DIV64) ->
+;      result mantissa lo32
+; d3 - source sign(1):exponent(15):reserved(16) -> lead-bit flag ->
+;      quotient high (DIV64) -> mantissa/sticky scratch
+; d4 - source mantissa hi32 -> divisor high (DIV64, unused after)
+; d5 - source mantissa lo32 -> divisor low (DIV64, unused after) ->
+;      round-bit scratch
+; d6 - scratch (fast-path probe, Inf/NaN/zero probe, sign xor) ->
+;      quotient low (DIV64) -> sticky/round scratch
 ; d7 - reserved
 ;
 FE_FDIV macro
 
-	; Extract exponents
-	bfextu			d0{1:11},d4
-	bfextu			d2{1:11},d5
-
-	; Fast path: both operands "ordinary" (finite, nonzero, not a
-	; denormal -- exponent in [1,2046])? If so, skip straight past the
-	; Inf/NaN/zero ladder below -- see FE_FADD for why this range check
-	; is an exact precondition for "the ladder wouldn't have done
-	; anything anyway". d6 is free here, before the sign computation
-	; both paths do next, so nothing needs restoring.
-	move.w			d4,d6
+	; Fast path (see FE_FADD)
+	bfextu			d0{1:15},d6
 	subq.w			#1,d6
-	cmp.w			#2046,d6
+	cmp.w			#32766,d6
 	bhs.s			.SpecialCase
-	move.w			d5,d6
+	bfextu			d3{1:15},d6
 	subq.w			#1,d6
-	cmp.w			#2046,d6
+	cmp.w			#32766,d6
 	bhs.s			.SpecialCase
-
-	; Ordinary: compute the sign and go straight to the real divide.
-	move.l			d0,d6
-	eor.l			d2,d6
-	and.l			#$80000000,d6
 	bra.w			.MainBody
 
 	.SpecialCase:
-	; Result sign = XOR of the operand signs (see FE_FMUL for why this
-	; is simpler than FE_FADD's {0:1}-packed convention)
-	move.l			d0,d6
-	eor.l			d2,d6
-	and.l			#$80000000,d6
-
 	; Infinities/NaNs: passed through as-is, matching FE_FADD/FE_FMUL's
 	; pragmatic style -- true special-case handling beyond this fast
 	; path stays out of scope here too
-	cmp.w			#$7ff,d4
+	bfextu			d0{1:15},d6
+	cmp.w			#$7fff,d6
 	bne.s			.DstExpOk
 	bra.w			.Done
 	.DstExpOk:
-	cmp.w			#$7ff,d5
+	bfextu			d3{1:15},d6
+	cmp.w			#$7fff,d6
 	bne.s			.SrcExpOk
-	move.l			d2,d0
-	move.l			d3,d1
+	move.l			d3,d0
+	move.l			d4,d1
+	move.l			d5,d2
 	bra.w			.Done
 	.SrcExpOk:
 
 	; Zero dividend -> zero (with the XOR'd sign)
-	tst.w			d4
+	bfextu			d0{1:15},d6
 	bne.s			.DstExpNoZ
-	moveq			#0,d0
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
 	moveq			#0,d1
-	or.l			d6,d0
+	moveq			#0,d2
+	move.l			d6,d0
 	bra.w			.Done
 	.DstExpNoZ:
 
 	; Zero divisor -> infinity (with the XOR'd sign)
-	tst.w			d5
+	bfextu			d3{1:15},d6
 	bne.s			.SrcExpNoZ
-	move.l			#$7ff00000,d0
-	moveq			#0,d1
-	or.l			d6,d0
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	or.l			#$7fff0000,d6
+	move.l			#$80000000,d1
+	moveq			#0,d2
+	move.l			d6,d0
 	bra.w			.Done
 	.SrcExpNoZ:
 
 	.MainBody:
-	; Combined (biased) exponent, before any renormalization below
-	sub.w			d5,d4
-	add.w			#1023,d4
+	; Sign = XOR of the operand signs, stashed to memory now since
+	; every register from here on is needed for the divide itself.
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	move.l			d6,DivSign
 
-	; Extract fractions (hidden bit set explicitly, as everywhere else)
-	bfextu			d0{12:20},d0
-	bfextu			d2{12:20},d2
-	bset			#20,d0
-	bset			#20,d2
+	; Combined (biased) exponent, before any renormalization below
+	bfextu			d0{1:15},d0
+	bfextu			d3{1:15},d3
+	sub.w			d3,d0
+	add.w			#16383,d0
 
 	; DIV64's loop needs its starting remainder below the divisor, which
 	; the dividend itself (D) isn't guaranteed to be -- D/V ranges over
@@ -91,106 +103,128 @@ FE_FDIV macro
 	; borrow, keep it and remember the leading quotient bit was 1 (D>=V),
 	; else undo it exactly (the X flag from subx is still live across
 	; the branch, so addx.l undoes it precisely) and the leading bit is
-	; 0. Sign is stashed first since every register is needed for this.
-	move.l			d6,DivSign
-	sub.l			d3,d1
-	subx.l			d2,d0
+	; 0.
+	sub.l			d5,d2
+	subx.l			d4,d1
 	bcc.s			.Lead1
-	add.l			d3,d1
-	addx.l			d2,d0
-	moveq			#0,d5
+	add.l			d5,d2
+	addx.l			d4,d1
+	moveq			#0,d3
 	bra.s			.LeadDone
 	.Lead1:
-	moveq			#1,d5
+	moveq			#1,d3
 	.LeadDone:
-	move.b			d5,DivLead
+	move.b			d3,DivLead
 
-	; Divide the (now pre-normalized) mantissas -> a 54-bit quotient in
-	; d5:d6, remainder left in d0:d1.
-	moveq			#0,d5
+	; Divide the (now pre-normalized) mantissas: exactly 64 iterations,
+	; the most DIV64's quotient accumulator (d3:d6) can hold without
+	; overflowing -- unlike the 53-bit-mantissa case this replaced,
+	; there's no spare bit to fold in an extra "+1 round bit" iteration
+	; here, hence the separate phantom step below.
+	moveq			#0,d3
 	moveq			#0,d6
-	DIV64			d0,d1,d2,d3,d5,d6
+	DIV64			d1,d2,d4,d5,d3,d6,64
 
-	; Fold the leading bit (from the pre-normalize step, above) back
-	; into the quotient, so it reads as a single up-to-55-bit value:
-	; bit 54 if the dividend was >= the divisor, else bit 53 is the
-	; leading bit. Two fixed cases, so two fixed bitfield offsets --
-	; same approach as FE_FMUL's normalization, see there for why.
+	; One more (non-accumulating) iteration to get the round bit and
+	; the true remainder used for sticky, without touching Q (d3:d6),
+	; which is already exactly 64 bits -- same overflow handling as
+	; DIV64's own loop (see its header comment).
+	lsl.l			#1,d2
+	roxl.l			#1,d1
+	bcs.s			.PhantomOverflowed
+	sub.l			d5,d2
+	subx.l			d4,d1
+	bcc.s			.PhantomBit1
+	add.l			d5,d2
+	addx.l			d4,d1
+	move.b			#0,DivRound
+	bra.s			.PhantomDone
+	.PhantomBit1:
+	move.b			#1,DivRound
+	bra.s			.PhantomDone
+	.PhantomOverflowed:
+	sub.l			d5,d2
+	subx.l			d4,d1
+	move.b			#1,DivRound
+	.PhantomDone:
+
+	; d4/d5 (the divisor) are free from here on. Two fixed cases based
+	; on the pre-normalize leading bit, mirroring FE_FMUL's Top127/
+	; Top126 split: if the dividend was >= the divisor (lead=1), the
+	; quotient's own top bit is that leading 1, so Q (d3:d6) needs
+	; shifting right by 1 to make room for it as the explicit integer
+	; bit, and what shifts out becomes the round bit (DivRound becomes
+	; part of sticky instead). If lead=0, Q is already exactly the
+	; 64-bit mantissa with no shift, DivRound is the round bit directly,
+	; and the exponent needs -1 (the leading 1 was one position lower).
 	tst.b			DivLead
-	beq.s			.NoLeadBit
-	bset			#22,d5
-	.NoLeadBit:
-	move.l			d5,QuotientHi
-	move.l			d6,QuotientLo
-	lea.l			QuotientHi,a0
-	btst			#22,d5
-	beq.s			.Top53
+	bne.s			.Lead1Case
 
-	.Top54:
-	bfextu			(a0){9:21},d0
-	bfextu			(a0){30:32},d1
-	btst			#1,d6
-	beq.s			.NoRoundBit1
-	moveq			#1,d5
-	bra.s			.HaveRound1
-	.NoRoundBit1:
-	moveq			#0,d5
-	.HaveRound1:
-	btst			#0,d6
-	bne.s			.Sticky1
-	tst.l			d0
-	bne.s			.Sticky1
+	.Lead0Case:
+	subq.w			#1,d0
 	tst.l			d1
-	bne.s			.Sticky1
-	moveq			#0,d6
-	bra.s			.Round
-	.Sticky1:
-	moveq			#1,d6
-	bra.s			.Round
-
-	.Top53:
-	subq.w			#1,d4
-	bfextu			(a0){10:21},d0
-	bfextu			(a0){31:32},d1
-	btst			#0,d6
-	beq.s			.NoRoundBit0
-	moveq			#1,d5
-	bra.s			.HaveRound0
-	.NoRoundBit0:
+	bne.s			.L0Sticky
+	tst.l			d2
+	beq.s			.L0NoSticky
+	.L0Sticky:
+	moveq			#1,d4
+	bra.s			.L0StickyDone
+	.L0NoSticky:
+	moveq			#0,d4
+	.L0StickyDone:
 	moveq			#0,d5
-	.HaveRound0:
-	tst.l			d0
-	bne.s			.Sticky0
-	tst.l			d1
-	beq.s			.NoSticky0
-	.Sticky0:
-	moveq			#1,d6
-	bra.s			.Round
-	.NoSticky0:
-	moveq			#0,d6
+	move.b			DivRound,d5
+	move.l			d3,d1
+	move.l			d6,d2
+	bra.w			.Round2
 
-	; Round to nearest, ties to even: d5 = round bit, d6 = sticky
-	.Round:
+	.Lead1Case:
+	tst.l			d1
+	bne.s			.L1Sticky
+	tst.l			d2
+	bne.s			.L1Sticky
+	tst.b			DivRound
+	beq.s			.L1NoSticky
+	.L1Sticky:
+	moveq			#1,d4
+	bra.s			.L1StickyDone
+	.L1NoSticky:
+	moveq			#0,d4
+	.L1StickyDone:
+	moveq			#1,d5
+	lsr.l			#1,d5
+	roxr.l			#1,d3
+	roxr.l			#1,d6
+	moveq			#0,d5
+	bcc.s			.L1RoundCaptured
+	moveq			#1,d5
+	.L1RoundCaptured:
+	move.l			d3,d1
+	move.l			d6,d2
+
+	; Round to nearest, ties to even: d5 = round bit, d4 = sticky
+	.Round2:
 	tst.l			d5
 	beq.s			.NoRoundUp
-	tst.l			d6
+	tst.l			d4
 	bne.s			.RoundUp
-	btst			#0,d1
+	btst			#0,d2
 	beq.s			.NoRoundUp
 	.RoundUp:
+	addq.l			#1,d2
+	bcc.s			.NoRoundUp
 	addq.l			#1,d1
-	bcc.s			.NoCarry
-	addq.l			#1,d0
-	.NoCarry:
-	btst			#21,d0
-	beq.s			.NoRoundUp
-	lsr.l			#1,d0
-	roxr.l			#1,d1
-	addq.w			#1,d4
+	bcc.s			.NoRoundUp
+	; Mantissa overflowed past 64 bits (was all-ones): renormalize.
+	bset			#31,d1
+	addq.w			#1,d0
 	.NoRoundUp:
 
-	; Construct result
-	bfins			d4,d0{1:11}
+	; Construct result word0 (see FE_FADD for why the shift alone is
+	; enough to land the exponent at bits 30-16 with bit31/bits15-0
+	; already zero)
+	lsl.l			#8,d0
+	lsl.l			#8,d0
 	move.l			DivSign,d6
 	or.l			d6,d0
 
@@ -198,10 +232,9 @@ FE_FDIV macro
 	.Done:
 
 endm
-QuotientHi	dc.l	0
-QuotientLo	dc.l	0
 DivSign		dc.l	0
 DivLead		dc.b	0
+DivRound	dc.b	0
 			even
 
 
@@ -216,21 +249,22 @@ FDIVHANDLER macro
 	; Increment PC
 	INREMENTPC		#$04
 
-	; Get data
+	; Get data -- see fadd.asm's FADDHANDLER for why source is fetched
+	; first, into d3/d4/d5.
 	GETDATALENGTH	d0
-	GETEAVALUE		d2,d3
-	GETREGISTER		d5
-	MOVEFPNTODN		d5,d0,d1
+	GETEAVALUE		d3,d4,d5
+	GETREGISTER		d6
+	MOVEFPNTODN		d6,d0,d1,d2
 
 	; Emulate instruction
 	FE_FDIV
 
 	; Write results
-	GETREGISTER		d5
-	MOVEDNTOFPN		d5,d0,d1
+	GETREGISTER		d6
+	MOVEDNTOFPN		d6,d0,d1,d2
 
 	; Set condition codes
-	SETCC			d0,d1
+	SETCC			d0,d1,d2
 
 endm
 

@@ -11,20 +11,22 @@ FdsqrtHandler
 	; Increment PC
 	INREMENTPC		#$04
 
-	; Get data
+	; Get data (extended-format operand, checklist #4)
 	GETDATALENGTH	d0
-	GETEAVALUE		d0,d1
-	
+	GETEAVALUE		d0,d1,d2
+	jsr				InternalToDouble
+
 	; Emulate instruction
 	movea.l			MathIeeeDoubTransBase,a6
 	jsr				_LVOIEEEDPSqrt(a6)
 
 	; Write results
+	jsr				DoubleToInternal
 	GETREGISTER		d5
-	MOVEDNTOFPN		d5,d0,d1
+	MOVEDNTOFPN		d5,d0,d1,d2
 
 	; Set condition codes
-	SETCC			d0,d1
+	SETCC			d0,d1,d2
 
 	; Done
 	rts

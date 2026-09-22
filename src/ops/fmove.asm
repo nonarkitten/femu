@@ -6,9 +6,17 @@ FmoveEaRegHandler
 	INREMENTPC		#$04
 	GETREGISTER		d5
 	GETDATALENGTH	d0
-	GETEAVALUE		d2,d3
-	MOVEDNTOFPN		d5,d2,d3
-	SETCC			d2,d3
+	; d0/d1/d2 (not d2/d3/d4): GETEAVALUE's underlying GetEaValue always
+	; returns through d0/d1/d2, and its macro expansion is a sequence
+	; of plain move.l's, not a simultaneous/atomic assignment -- asking
+	; it to land in d2/d3/d4 let the first move (d0->d2) clobber d2
+	; before the third move could still read it as GetEaValue's own
+	; mantissa-lo output, corrupting every fmove ea,reg. d5 (the FPn
+	; index from GETREGISTER above) survives GETDATALENGTH/GETEAVALUE
+	; untouched, same as every other handler relies on.
+	GETEAVALUE		d0,d1,d2
+	MOVEDNTOFPN		d5,d0,d1,d2
+	SETCC			d0,d1,d2
 	rts
 	.DEBUGOP:
 	dc.b 			"fmovem ea,reg %08lx",10,0
@@ -35,69 +43,70 @@ FmoveRegEaHandler
 ;
 ; 
 FmoveRegEaByte
-	MOVEFPNTODN			d5,d0,d1
-	jsr					DoubleToByte
+	MOVEFPNTODN			d5,d0,d1,d2
+	jsr					InternalToByte
 	move.b				d0,(a3)
 	rts
 
-	
+
 ;
 ;
-; 
+;
 FmoveRegEaWord
-	MOVEFPNTODN			d5,d0,d1
-	jsr					DoubleToWord
+	MOVEFPNTODN			d5,d0,d1,d2
+	jsr					InternalToWord
 	move.w				d0,(a3)
 	rts
 
-	
+
 ;
 ;
-; 
+;
 FmoveRegEaLong
-	MOVEFPNTODN			d5,d0,d1
-	jsr					DoubleToLong
+	MOVEFPNTODN			d5,d0,d1,d2
+	jsr					InternalToLong
 	move.l				d0,(a3)
 	rts
 
 
 ;
 ;
-; 
+;
 FmoveRegEaSingle
-	MOVEFPNTODN			d5,d0,d1
-	jsr					DoubleToSingle
+	MOVEFPNTODN			d5,d0,d1,d2
+	jsr					InternalToSingle
 	move.l				d0,(a3)
 	rts
 
-	
+
 ;
 ;
-; 
+;
 FmoveRegEaDouble
-	MOVEFPNTODN			d5,d0,d1
+	MOVEFPNTODN			d5,d0,d1,d2
+	jsr					InternalToDouble
 	movem.l				d0/d1,(a3)
 	rts
 
-	
+
 ;
+; Extended: memory layout is byte-identical to the internal format
+; (checklist #4's whole point) -- straight copy, no conversion call.
 ;
-; 
 FmoveRegEaExtended
-	MOVEFPNTODN			d5,d0,d1
-	jsr					DoubleToExtended
+	MOVEFPNTODN			d5,d0,d1,d2
 	movem.l				d0/d1/d2,(a3)
 	rts
-	
-	
+
+
 ;
 ;
-; 
+;
 FmoveRegEaPacked
-	MOVEFPNTODN			d5,d0,d1
-	jsr					DoubleToPacked
+	MOVEFPNTODN			d5,d0,d1,d2
+	jsr					InternalToPacked
 	movem.l				d0/d1/d2,(a3)
-	rts	
+	rts
 
 	
 ;

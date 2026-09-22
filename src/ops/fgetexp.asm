@@ -12,21 +12,21 @@ FgetexpHandler
 	; Increment PC
 	INREMENTPC		#$04
 	
-	; Get data
+	; Get data (extended format, checklist #4: 15-bit exponent, bias 16383)
 	GETDATALENGTH	d0
-	GETEAVALUE		d0,d1
-	
+	GETEAVALUE		d0,d1,d2
+
 	; Emulate instruction
-	bfextu			d0{1:11},d0
-	subi.w			#1023,d0
-	jsr				LongToDouble
-	
+	bfextu			d0{1:15},d0
+	subi.w			#16383,d0
+	jsr				LongToInternal
+
 	; Write results
 	GETREGISTER		d5
-	MOVEDNTOFPN		d5,d0,d1
-	
+	MOVEDNTOFPN		d5,d0,d1,d2
+
 	; Set condition codes
-	SETCC			d0,d1
+	SETCC			d0,d1,d2
 	
 	; Done
 	rts

@@ -1,8 +1,20 @@
 # Design: native internal representation (checklist `#4`)
 
-Status: **design + measurement only** — no op files touched. This is the
-deliverable for kicking off `#4`; see the recommendation at the end for
-what (if anything) a follow-up branch should actually implement.
+Status: **implemented** (checklist `#4` in `README.md` is now ✅ Done).
+This document is the original design/measurement pass this session's
+recommendation was based on — kept as-is below for the historical
+reasoning and the pre-implementation baseline numbers it measured. The
+user explicitly chose the full rewrite over the narrower `fmovem`-only
+follow-up this document recommends below, after being shown the
+tradeoffs; see `README.md`'s `#4` row and `NEXT.md` for what actually
+landed and the real measured before/after (short version: the
+"relocates, doesn't disappear" prediction for `fmove.x`/`fmove.d` held
+exactly; `fmovem` got the clear win predicted; `fadd`/`fsub`/`fdiv`
+register-to-register got measurably *slower*, which this design pass
+did not anticipate — it only measured the memory-operand paths, not the
+register-to-register arithmetic ops' own internal algorithms, which
+turned out to rely on spare-bit tricks that don't survive a full 64-bit
+mantissa).
 
 ## The idea, as written in the checklist
 

@@ -54,78 +54,89 @@ endm
 
 
 ;
-; Normalizes a double. Pollutes \4!
+; Normalizes an extended-format mantissa (checklist #4: 15-bit exponent,
+; explicit 64-bit mantissa -- no more hidden-bit-at-bit-20 packing).
+; Pollutes \4!
 ;
 ; INPUTS
 ;	\1 -- Exponent.
-;	\2 -- High bits of fraction.
-;	\3 -- Low bits of fraction.
+;	\2 -- High bits of mantissa.
+;	\3 -- Low bits of mantissa.
 ;	\4 -- Scratch register.
 ;
 ; RESULT
 ;	\1 -- Exponent.
-;	\2 -- High bits of fraction.
-;	\3 -- Low bits of fraction.
+;	\2 -- High bits of mantissa.
+;	\3 -- Low bits of mantissa.
 ;
 ; TODO: detect overflows
 ; TODO: detect underflows
 ;
 NORMALIZE macro
 
-	; Find leading digit from fraction
+	; Find leading digit from mantissa
 	.Normalize:
 	bfffo			\2{0:32},\4
 	bne.s			.HighNormalize
 	bfffo			\3{0:32},\4
 	bne.s			.LowNormalize
-	
-	; If fraction is zero then zero exponent
+
+	; If mantissa is zero then zero exponent
 	move.w			#0,\1
 	bra.s			.NormalizeOk
-	
-	; Normalize starting from high bits
+
+	; Normalize starting from high bits. Target position is 0 (the
+	; explicit integer bit already at the register's MSB) -- unlike the
+	; old hidden-bit convention's target of 11, this is never reached
+	; from below (bfffo can't return negative), so .HighNormalizeRight
+	; below is unreachable in practice; left in place, harmless, rather
+	; than restructuring a macro this central under time pressure.
 	.HighNormalize:
-	cmp.b			#11,\4
+	cmp.b			#0,\4
 	beq.s			.NormalizeOk
 	bgt.s			.HighNormalizeLeft
-	
+
 	; Shift high bits to right
 	.HighNormalizeRight:
-	subi.l			#11,\4
+	subi.l			#0,\4
 	neg.l			\4
 	add.w			\4,\1
 	LSR64L			\4,\2,\3
 	bra.s			.NormalizeOk
-	
+
 	; Shift high bits to left
 	.HighNormalizeLeft:
-	subi.l			#11,\4
+	subi.l			#0,\4
 	sub.w			\4,\1
 	LSL64L			\4,\2,\3
 	bra.s			.NormalizeOk
-	
+
 	; Normalize starting from low bits
 	.LowNormalize:
 	move.l			\3,\2
 	move.l			#0,\3
 	subi.w			#32,\1
 	bra.s			.Normalize
-	
+
 	; Normalization done
 	.NormalizeOk:
-	
-	; Check for over- and underflows
+
+	; Check for over- and underflows (15-bit exponent field: 0..32767,
+	; with 32767 = $7fff reserved for Inf/NaN, same scaling as before)
 	tst.w			\1
 	bgt.s			.NoUnderflow
 	move.w			#0,\1
 	move.l			#0,\2
 	move.l			#0,\3
 	.NoUnderflow:
-	cmp.w			#2047,\1
+	cmp.w			#32767,\1
 	blt.s			.NoOverflow
-	move.w			#$7ff,\1
-	move.l			#0,\2
+	move.w			#$7fff,\1
+	; Extended Infinity needs the explicit integer bit SET (mantissa
+	; $8000000000000000) -- unlike the double format this replaced,
+	; where an implicit hidden bit made an all-zero mantissa correct.
+	move.l			#$80000000,\2
 	move.l			#0,\3
 	.NoOverflow:
-	
+
 endm
