@@ -121,10 +121,35 @@ chaining existed, but once `HandleException` can peek past one opcode into
 the next, a densely-packed probe would silently chain into (and mis-time)
 its neighbor. Fixed via `SLOT_STRIDE` (`bench/src/harness.c`): opcodes
 under test are now placed 8 bytes apart with a zeroed (non-F-line) gap
-between them; verified this doesn't change a single existing number. `#7`
-(depends on `0, 6`, both now done) is unblocked; `#9` (transcendental fast
-paths) and `#10` (native transcendentals, deps `#1`/`#4` done) remain fair
-game too.
+between them; verified this doesn't change a single existing number.
+
+`#7` (trim the trap prologue/epilogue) is ❌ — investigated, not
+implemented, no benchmark run since nothing safe to measure was built. The
+full `movem.l d0-d7/a0-sp` save can't be narrowed per-handler:
+`ea.asm`'s `GETEAVALUE`/`GetEa`/`ADDAN` reach any of the 15 general
+registers by a *runtime*-computed offset into exactly the frame that
+`movem` lays down (`OSTACKAN`/`OSTACKDN` fixed at `-32`/`-64` from
+`STACKFRAME`, indexed by the actual 68K register number an opcode's EA
+extension word names at runtime), so the save can't be narrowed below the
+full set without already knowing which register that is. A real, bounded
+subset (register-to-register `fadd`/`fsub`/`fmul`/`fdiv`/`fcmp`/`fabs`/
+`fneg`/`ftst`/`fscale`/`fgetexp`/`fgetman`, confirmed by grep to never
+touch `a0`/`a2`/`a3`/`a6`) exists but doesn't pay for itself once you try
+to build it: skipping those 4 registers from the `movem` transfer list
+also shrinks the frame, but `OSTACKAN`/`OSTACKDN`'s fixed-offset-by-
+register-number addressing means their slots still have to exist for any
+later-in-a-chain (`#6`) instruction that does need them, and gap-filling
+to preserve those offsets costs about what the skipped `move.l aN,-(sp)`
+did. Real per-handler trimming needs the frame's fixed-offset addressing
+scheme itself to change — that's `#8`'s territory (a fast EA-decode path
+could plausibly use its own smaller, fixed-shape frame), so `#7` is
+effectively blocked on `#8` landing first, not just on `0`/`6`. Full
+writeup in `README.md`'s `#7` row; the finding is also recorded as a
+comment above `PREHANDLEEXCEPTION` in `src/utils/fhandler.asm` so a future
+session doesn't redo the audit. `#8` (EA-decode fast path, deps `0`) is
+now the natural next row if `#7` is ever revisited; `#9` (transcendental
+fast paths) and `#10` (native transcendentals, deps `#1`/`#4` done) remain
+fair game too, and `#11` (fmovem bulk register move fix) is untouched.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

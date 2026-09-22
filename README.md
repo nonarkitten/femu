@@ -91,7 +91,7 @@ result) in [Checklist details](#checklist-details) below.
 | [4](#row-4) | Native extended (80-bit-equivalent) internal representation | 1 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [5](#row-5) | Force-single-precision fast path | 1 | ✅ Done (`fmul`/`fdiv` only) | `claude/keen-mendel-3hb6vs` |
 | [6](#row-6) | FPU-opcode chaining (skip trap exit/re-entry between back-to-back ops) | 0 | ✅ Done | `perf/06-opcode-chaining` |
-| [7](#row-7) | Trim the trap prologue/epilogue (save only what's clobbered) | 0, 6 | 🔲 Not started | `perf/07-lean-trap-frame` |
+| [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | 🔲 Not started | `perf/08-ea-fastpath` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | 🔲 Not started | `perf/09-transcendental-fastpaths` |
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 Not started | `perf/10-native-transcendentals` |
@@ -454,12 +454,73 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 <a id="row-7"></a>
 #### #7 — Trim the trap prologue/epilogue
 
-- **Idea:** `movem.l d0-d7/a0-sp` saves/restores all 15 registers on
-  every trap; save only what the specific handler actually clobbers.
+- **Idea:** ~~`movem.l d0-d7/a0-sp` saves/restores all 15 registers on
+  every trap; save only what the specific handler actually clobbers.~~
 - **Depends on:** 0, 6
-- **Status:** 🔲 Not started
+- **Status:** ❌ Not viable as scoped
 - **Branch:** `perf/07-lean-trap-frame`
-- **Result:** —
+- **Result:** Investigated, not implemented — no code changed beyond a
+  comment recording the finding (`src/utils/fhandler.asm`, above
+  `PREHANDLEEXCEPTION`), since the saving isn't reachable without breaking
+  an invariant the rest of the emulator depends on.
+
+  `ea.asm`'s `GETEAVALUE`/`GetEa`/`ADDAN` reach any of the 15 general
+  registers by a *runtime*-computed offset —
+  `(OSTACKAN,STACKFRAME,dN.w)`, `OSTACKAN`/`OSTACKDN` fixed at `-32`/`-64`
+  from `STACKFRAME` — into exactly the frame `PREHANDLEEXCEPTION`'s
+  `movem.l d0-d7/a0-sp,-(sp)` lays down. Any FPU opcode with a memory
+  operand can name any of `a0`-`a6`/`d0`-`d7` in its EA extension word, so
+  the *save* side can never be narrowed below the full 15-register set
+  without already having decoded the instruction that determines which
+  register that is — a chicken-and-egg the shared, one-prologue-for-every-
+  opcode design can't resolve.
+
+  Audited whether the "save only what the handler clobbers" framing still
+  gives a real, bounded win for the register-to-register form specifically
+  (no EA decode at all, so no runtime-dependent register): confirmed by
+  grep across every `src/ops/*.asm` that `fadd`/`fsub`/`fmul`/`fdiv`/
+  `fcmp`/`fabs`/`fneg`/`ftst`/`fscale`/`fgetexp`/`fgetman` (and their
+  `fs*`/`fd*` precision-forced siblings, which share the same handler
+  code) never reference `a0`/`a2`/`a3`/`a6` anywhere in their own code or
+  in the macros they call (`MOVEFPNTODN`/`MOVEDNTOFPN`/`SETCC`/the `FE_*`
+  math macros all stay within `d0`-`d6`/`a1`) — but only when the
+  instruction's source-specifier bit (bit 14) says "FPm register", not
+  memory; the identical handler code reached via the EA-to-reg path
+  unconditionally needs `GetEa` (`a0`) and the full `OSTACKAN` image
+  regardless of which op it is, and transcendentals reached through the
+  same dispatch table (e.g. `fsin fp0,fp0`, also bit14=0) still need `a6`
+  for the library call. So a real skip is only safe for that narrower
+  reg-to-reg, non-transcendental subset, decided per-instruction — which,
+  under checklist #6's opcode chaining, means per chain iteration, since a
+  single prologue/epilogue can now span several different opcodes.
+
+  That narrower version doesn't pay for itself once you try to build it:
+  `movem.l ...,-(sp)` only reserves stack space (4 bytes) for registers
+  actually present in its transfer list, so omitting `a0`/`a2`/`a3`/`a6`
+  from the list also shrinks the frame by 16 bytes — but `OSTACKAN`/
+  `OSTACKDN` index every register's slot by its fixed 68K register number
+  (`STACKFRAME + OSTACKAN + regnum*4`), so those four slots still have to
+  exist at their normal fixed offsets for any later-in-the-chain
+  instruction that *does* need them, or for `POSTHANDLEEXCEPTION`'s
+  restore (unconditional today, and made conditional only at the cost of
+  tracking a reduced/full flag through the whole chain). Gap-filling the
+  skipped slots to keep those fixed offsets intact (e.g. `subq.l #4,sp`
+  per skipped register) costs about what the `move.l aN,-(sp)` it was
+  meant to avoid did in the first place — the entire saving evaporates
+  once the frame's fixed-offset addressing (load-bearing for `GETEAVALUE`/
+  `ADDAN` everywhere) is kept intact, which it must be for correctness.
+
+  Real per-handler register trimming needs the frame's addressing scheme
+  itself to stop being "every register at a fixed absolute offset
+  regardless of which ones are actually live for this opcode" — that's
+  `#8`'s territory (a fast EA-decode path for the common addressing modes
+  could plausibly get away with its own smaller, fixed-shape frame that
+  doesn't need the general `OSTACKAN` lookup at all), not a standalone
+  edit here. Restated: `#7` is effectively blocked on `#8` landing first,
+  not just on `0`/`6` as the checklist's `Depends on` column currently
+  says — left as-is rather than edited, since the dependency notation is
+  informative context for a future session, not a hard gate the workflow
+  enforces.
 
 <a id="row-8"></a>
 #### #8 — EA-decode fast path
