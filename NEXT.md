@@ -365,8 +365,27 @@ through unchanged.
 functions, plus `fsqrt` found along the way, now run without
 `mathieeedoubtrans.library`/`mathieeedoubbas.library` at all --
 femu's transcendentals no longer need AmigaOS, the row's whole point
-from the start. `#11` (fmovem bulk register move fix) is the only
-row left untouched and is fair game any time.
+from the start.
+
+Asked (not assumed) right after `#10` closed: how do the native
+transcendentals compare to the old library-call path? Answer: there's
+no real comparison available -- the bench harness always intercepted
+the library call and never counted cycles inside it, so the old
+"(stub)" numbers (954-1030 cycles, every op) were pure femu-side call
+overhead with the real library math excluded entirely, and the real-
+hardware harness (`ftest.asm`) is still the known-broken one from
+`CLAUDE.md`'s ground truth. What IS real and measured: `#10`'s own
+chaining cost. `fatan` alone costs 24k-36k cycles; `fasin`/`facos`
+chain `fatan` + `fsqrt` + four more ops and land at ~55k -- the full
+cost of everything chained, no amortization, same pattern in
+`fsinh`/`fcosh`/`ftanh` (2x `fetox`) and `ftwotox`/`ftentox`/`flog2`/
+`flog10` (1x `fetox`/`flogn` + a multiply). This is now `#13` on the
+checklist (CORDIC, or a shorter per-function series that skips the
+detour through `fatan`/`fetox`/`flogn`) -- not started, not next.
+
+`#11` (fmovem bulk register move fix) is next: the only row left
+untouched from before `#10` started, now that `#13` has been recorded
+rather than chased immediately.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

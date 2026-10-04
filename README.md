@@ -97,6 +97,7 @@ result) in [Checklist details](#checklist-details) below.
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | ✅ Done (14/14 + `fsqrt` — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
+| [13](#row-13) | CORDIC (or a shorter minimax series) for `#10`'s native transcendentals, to cut the per-hop chaining cost `#10` measured | 10 | 🔲 Not started | `perf/13-cordic-transcendentals` |
 
 ### Checklist details
 
@@ -1199,6 +1200,47 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   record where the line is drawn (e.g. does 48-bit mode replace `#4`'s
   64-bit default outright, or sit alongside it as a third FPCR-style
   mode next to extended/single/double?).
+
+<a id="row-13"></a>
+#### #13 — CORDIC (or a shorter series) for the native transcendentals
+
+- **Idea:** `#10` made every transcendental run without
+  `mathieeedoubtrans.library`, but measurement after the row finished
+  (asked by the user, not assumed) showed the real cost of that choice:
+  a "derived" op pays the FULL cost of everything it chains, with no
+  amortization. `fatan` alone is 24k-36k cycles (range reduction + a
+  25-term Horner series); `fasin`/`facos` chain `fatan` + `fsqrt` + four
+  more arithmetic ops and land at ~55k cycles — roughly double `fatan`
+  alone, and ~55x `#10`'s old "visible overhead" floor (not a fair
+  comparison on its own — that floor excluded the real library math
+  entirely, see this row's own `Result` below — but ~55k cycles per
+  `facos` is a real, now-measured number regardless of what the old
+  path would have cost). `ftanh`/`fsinh`/`fcosh` (2x `fetox` + add/sub)
+  and `flog2`/`flog10`/`ftwotox`/`ftentox` (1x `fetox`/`flogn` + a
+  multiply) show the same compounding, just with fewer hops. The idea:
+  replace the current Horner-polynomial-per-function approach with
+  CORDIC (shift-add-rotate iterations, no `MUL64`/`DIV64` needed for
+  the rotation itself) for the sin/cos/atan/sinh/cosh/tanh family, or
+  failing that, a shorter directly-fitted minimax series per function
+  instead of composing through `fatan`/`fetox`/`flogn` — either way,
+  cutting the chain length is the actual goal, not swapping one
+  polynomial for another of the same shape.
+- **Depends on:** 10
+- **Status:** 🔲 Not started
+- **Branch:** `perf/13-cordic-transcendentals`
+- **Result:** — Suggested by the user right after `#10` closed, having
+  asked for and gotten the real chaining-cost numbers above (not a
+  guess). The user also flagged the obvious open question up front:
+  whether CORDIC is actually a good fit for a 68000/68020 without
+  hardware barrel-shift-per-cycle — CLAUDE.md's "measure, don't guess"
+  applies here as much as anywhere: verify CORDIC's iteration count and
+  accuracy in Python against this format's 64-bit mantissa (same
+  discipline `#10`'s own series used) *and* bench it against the
+  current Horner-series native code before assuming it's a net win, not
+  just a shift-vs-multiply argument on paper. If CORDIC doesn't pan out,
+  the fallback (a shorter per-function minimax series, same shape as
+  `#10`'s existing tables but skipping the `fatan`/`fetox`/`flogn`
+  detour) is still worth landing on its own.
 
 See `ISSUES.md` for the original author's per-opcode issue notes — several
 rows above trace directly back to entries there (e.g. "calls
