@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt` done) | `claude/keen-mendel-3hb6vs` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt`, `fetox` done) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -706,7 +706,7 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   AmigaOS library dependency entirely, so this can in principle run
   on any 68k target (Mac, Atari), not just Amiga.
 - **Depends on:** 1, 4
-- **Status:** 🔲 In progress (`fsqrt` done)
+- **Status:** 🔲 In progress (`fsqrt`, `fetox` done)
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -764,8 +764,81 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   cost. All existing vectors and probes remain bit-exact elsewhere
   (only the pre-existing, unrelated `flog2` 1-ULP discrepancy persists).
 
-  **Still to do in this row:** `fetox`/`flogn` (foundational — once
-  native, `ftwotox`/`ftentox`'s general case, `flog2`/`flog10`, and
+  **`fetox` — done.** The `#9` fast path for `+0`/`-0` stays; `+Inf`/
+  `-Inf`/NaN pass through the same way `fsqrt` does (self-identical
+  `+Inf`, `-Inf`→`+0`, NaN discriminated the same way `SETCC` itself
+  does); every other finite `x` goes through `NativeFexp`
+  (`src/utils/nativemath.asm`): standard range reduction
+  `x = k*ln(2) + r` with `k = round(x * 1/ln2)` (`NativeRoundToInt`,
+  new) and `|r| <= ln(2)/2`, a 16-term (`1/0!`..`1/15!`) Horner-evaluated
+  Taylor polynomial for `e^r`, then `e^x = e^r * 2^k` applied as a plain
+  exponent bump rather than a multiply — the same technique `#5`/`#9`
+  already use. `k` round-trips through a new `NativeIntToExtended`
+  (the inverse of `NativeRoundToInt`) so it can be multiplied against
+  `ln(2)` in extended precision. All 16 Taylor coefficients were
+  verified in Python (exact `Decimal` arithmetic) to bring the series'
+  *own* truncation error below 2^-63 across the whole reduced range
+  before any assembly was written.
+
+  Two real, pre-existing bugs surfaced while landing this (not
+  checklist-#10-specific — both are now fixed, see their own commits/
+  comments):
+
+  - **`d7` is not a free scratch register for native-math loop
+    counters.** `src/utils/constants.asm` aliases `INSTRUCTION equr
+    d7` — the live decoded opcode word that every handler's
+    `GETREGISTER` (and `HandleException`'s own chain-loop decode)
+    reads *after* the handler returns. A Horner-loop counter parked in
+    `d7` (and `NativeFsqrt`'s pre-existing iteration counter, same
+    mistake, merged earlier with this row) silently corrupts the
+    destination FPn index the caller decodes next, so the correct
+    result gets written into the *wrong* register while the real
+    destination keeps its original, unmodified input — "wrong answer"
+    looked exactly like "the op didn't run" for these monadic,
+    self-overwriting (`fp0,fp0`) test vectors. `NativeFsqrt` only
+    "worked" by coincidence: its loop happens to leave `d7` at exactly
+    `0`, which decodes to `fp0` regardless. Fixed by moving both loop
+    counters into memory (`SqrtIterCount`/`ExpIterCount`) instead of a
+    register — see `nativemath.asm`'s header comment for the full
+    writeup.
+  - **`FE_FADD`'s result sign was silently discarded for any case
+    reaching `MainBody`'s `DiffSigns`/`SameSign` paths.** The sign is
+    computed there as `d6 = <something> & $80000000` (bit31
+    convention), but the final construction used `bfins d6,d0{0:1}`,
+    which inserts only `d6`'s **bit 0** — always `0` for a value built
+    by masking with `$80000000`. Every add/sub whose true mathematical
+    result is negative silently came out positive; never caught
+    because no existing vector exercised `FE_FADD`'s `MainBody` with a
+    negative result (shared by `fadd` *and* `fsub`, since `fsub` is
+    `bchg #31,d3` + `FE_FADD`). Fixed by changing the final step to
+    `or.l d6,d0` (matching `FE_FMUL`'s own, correct convention for the
+    same job). Caught here because `NativeFexp`'s range reduction
+    needs `r = x - k*ln(2)` to come out negative for roughly half of
+    all inputs (positive `x` with `k` rounding up past it) — the very
+    case nothing had tested before.
+  - (Non-correctness, bench-only.) The harness's own `ops[]`/`vecs[]`
+    buffers were hardcoded to 64 entries with no overflow check —
+    `fread`'s byte count and `load_vectors`'s row count both silently
+    capped there, so adding vectors past #64 made the lockstep count
+    check compare two equally-truncated numbers and report nothing
+    wrong while 5 new vectors silently never ran. Bumped to 128 with a
+    comment explaining why, in `bench/src/harness.c`.
+
+  **Measured** (`bench/`, register-direct, 6 new vectors: negative
+  `x`, a larger-magnitude positive and negative `x`, a small nonzero
+  `x`, `+Inf`, `-Inf`): every case `MATCH`es the host `exp()`
+  bit-exactly, including the pre-existing `fetox(3.66)` vector, which
+  now shows a real number instead of a `(stub)` approximation — no
+  longer `(stub)`, this is the actual now-measurable cost. Slower than
+  the old library call's unmeasured stand-in, as expected and
+  explicitly not the point of this row. Two new vectors (`fsub 2.0
+  5.0`, `fsub -2.0 -5.0`) and one (`fadd 2.0 5.0`) were added
+  specifically to catch and pin the `FE_FADD` sign bug above; all
+  existing vectors and probes remain bit-exact elsewhere (only the
+  pre-existing, unrelated `flog2` 1-ULP discrepancy persists).
+
+  **Still to do in this row:** `flogn` (foundational — once native,
+  `ftwotox`/`ftentox`'s general case, `flog2`/`flog10`, and
   `fsinh`/`fcosh`/`ftanh` all become cheap derivations rather than
   needing their own algorithms), `fsin`/`fcos` (foundational for `ftan`/
   `fsincos`), and `fatan` (foundational for `fasin`/`facos` via

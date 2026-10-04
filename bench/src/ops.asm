@@ -75,3 +75,12 @@
 	fsqrt.x		fp0,fp0
 	fsqrt.x		fp0,fp0
 	fsqrt.x		fp0,fp0
+	fetox.x		fp0,fp0
+	fetox.x		fp0,fp0
+	fetox.x		fp0,fp0
+	fetox.x		fp0,fp0
+	fetox.x		fp0,fp0
+	fetox.x		fp0,fp0
+	fsub.x		fp1,fp0
+	fsub.x		fp1,fp0
+	fadd.x		fp1,fp0
