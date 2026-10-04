@@ -171,9 +171,26 @@ its own dedicated register set, not just inline the same lookup), not
 something this row's scope included. `#7` remains ❌/blocked until
 something actually does that.
 
-`#9` (transcendental fast paths) and `#10` (native transcendentals, deps
-`#1`/`#4` done) are fair game next; `#11` (fmovem bulk register move fix)
-is untouched.
+`#9` (transcendental fast paths) is done, scoped down by one piece: `ftwotox`
+with an integer operand, `fetox(0)`/`flogn(1)`, `fsqrt` at 0/1, and `fmul`/
+`fdiv` by `+-1`/a power of two all landed (see `README.md`'s `#9` row for
+the full writeup and measured numbers — `fdiv`'s power-of-two case is the
+biggest single win on the checklist so far: 5744→862 cycles, avoiding
+`DIV64` entirely). `ftentox` with an integer operand is explicitly NOT
+given the same "bump the exponent" treatment — that's a base-2-only trick,
+and a correct base-10 equivalent (binary exponentiation off the constant
+ROM's existing powers-of-ten entries) is real but meaningfully bigger scope
+than anything else in this row, left as a candidate follow-up. Every new
+fast path was verified bit-exact against the host reference (register-
+direct vectors appended to `vectors/ops.txt`/`src/ops.asm` in their
+existing lockstep convention — no new probe infrastructure needed, since
+everything here is register-to-register) before being counted as done, and
+every ordinary (non-matching) input still pays only a small, flat, measured
+tax for the new checks (`fmul`/`fdiv` +12, `fetox`/`flogn` +12-14, `fsqrt`
++26, `ftwotox` +64 worst case) with zero change to its result.
+
+`#10` (native transcendentals, deps `#1`/`#4` done) is fair game next;
+`#11` (fmovem bulk register move fix) is untouched.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

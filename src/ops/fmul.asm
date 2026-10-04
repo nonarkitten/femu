@@ -86,6 +86,37 @@ FE_FMUL macro
 	eor.l			d3,d6
 	and.l			#$80000000,d6
 
+	; Fast path (checklist #9): multiply by src == +-1 or by a clean
+	; power of two skips MUL64 (four mulu.l's) and the round/normalize
+	; dance entirely -- both operands are already known ordinary
+	; (fast-path range check above), so all that's left to check is
+	; whether src's mantissa is explicit-bit-only (d4/d5 read before
+	; the bfextu below destroys d3's word0).
+	cmp.l			#$80000000,d4
+	bne.s			.NotPow2
+	tst.l			d5
+	bne.s			.NotPow2
+	cmp.l			#$3fff0000,d3
+	bne.s			.PowNotOne
+	; src == +-1 exactly -- result is dst with its sign replaced by
+	; the XOR'd sign above; mantissa/exponent (d0/d1/d2) untouched.
+	and.l			#$7fffffff,d0
+	or.l			d6,d0
+	bra.w			.Done
+	.PowNotOne:
+	; src == +-2^k, k!=0 -- result mantissa is dst's unchanged, only
+	; the exponent moves (same combined-exponent arithmetic the slow
+	; path below would do anyway, just without ever reaching MUL64).
+	bfextu			d0{1:15},d0
+	bfextu			d3{1:15},d3
+	add.w			d3,d0
+	sub.w			#16383,d0
+	lsl.l			#8,d0
+	lsl.l			#8,d0
+	or.l			d6,d0
+	bra.w			.Done
+	.NotPow2:
+
 	; Combined (biased) exponent, before any renormalization below
 	bfextu			d0{1:15},d0
 	bfextu			d3{1:15},d3

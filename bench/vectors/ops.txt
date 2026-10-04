@@ -59,3 +59,13 @@ fsin     0.25     -
 fsinh    8.62     -
 ftan     3.91     -
 ftanh    6.11     -
+fetox    0.0      -
+flogn    1.0      -
+fsqrt    0.0      -
+fsqrt    1.0      -
+ftwotox  3.0      -
+ftwotox  -2.0     -
+fmul     5.5      1.0
+fdiv     5.5      1.0
+fmul     -3.5     4.0
+fdiv     100.0    0.5
