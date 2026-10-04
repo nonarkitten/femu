@@ -32,14 +32,29 @@ FdsqrtHandler
 	beq.w			.FastDone
 	.NotOne:
 
-	jsr				InternalToDouble
-
-	; Emulate instruction
-	movea.l			MathIeeeDoubTransBase,a6
-	jsr				_LVOIEEEDPSqrt(a6)
+	; Native square root (checklist #10): no library call anywhere in
+	; this op any more. Inf passes through unchanged (sqrt(Inf)=Inf is
+	; already the identity result, same self-identical trick as the
+	; 0/1 fast path above); NaN passes through unchanged too. A
+	; negative finite operand produces a NaN (sqrt of a negative
+	; number isn't real) -- constructed the same way SETCC's own NaN
+	; detection expects: exponent field all-ones with a mantissa that
+	; ISN'T the clean explicit-bit-only Infinity pattern. Everything
+	; else (ordinary positive finite values) goes through
+	; NativeFsqrt's Newton-Raphson (src/utils/nativemath.asm).
+	bfextu			d0{1:15},d6
+	cmp.l			#32767,d6
+	beq.w			.FastDone
+	btst			#31,d0
+	beq.s			.Positive
+	move.l			#$7fff0000,d0
+	move.l			#$ffffffff,d1
+	move.l			#$ffffffff,d2
+	bra.w			.FastDone
+	.Positive:
+	jsr				NativeFsqrt
 
 	; Write results
-	jsr				DoubleToInternal
 	.FastDone:
 	GETREGISTER		d5
 	MOVEDNTOFPN		d5,d0,d1,d2

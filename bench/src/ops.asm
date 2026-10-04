@@ -67,3 +67,11 @@
 	fdiv.x		fp1,fp0
 	fmul.x		fp1,fp0
 	fdiv.x		fp1,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0

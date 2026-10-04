@@ -189,8 +189,38 @@ every ordinary (non-matching) input still pays only a small, flat, measured
 tax for the new checks (`fmul`/`fdiv` +12, `fetox`/`flogn` +12-14, `fsqrt`
 +26, `ftwotox` +64 worst case) with zero change to its result.
 
-`#10` (native transcendentals, deps `#1`/`#4` done) is fair game next;
-`#11` (fmovem bulk register move fix) is untouched.
+`#10` (native transcendentals) is in progress — this is the biggest row on
+the checklist by far (14 named functions, several needing a real numerical
+algorithm rather than a bit-trick), so it's landing in pieces, each fully
+verified and measured on its own rather than held back for one giant
+commit. Motivation this time is portability, not speed, per the user:
+dropping `mathieeedoubtrans.library` entirely means femu's transcendentals
+no longer need AmigaOS, so this can in principle run on any 68k target.
+
+Shared infrastructure landed first: `src/utils/nativemath.asm` has thin
+`jsr`/`rts` wrappers (`NativeFadd`/`NativeFsub`/`NativeFmul`/`NativeFdiv`)
+around the existing `FE_FADD`/`FE_FMUL`/`FE_FDIV` macros, so a
+transcendental's range-reduction/polynomial code can chain several
+arithmetic steps via plain calls instead of inlining each macro's full
+body at every step — deliberately the opposite choice from those macros
+staying inlined at their OWN hot call sites, since this code is cold
+(reached once per trap, not once per arithmetic step within one).
+
+`fsqrt`'s general case is done (the `#9` fast path for 0/1 stays; see
+`README.md`'s `#10` row for the full writeup): `NativeFsqrt` does Newton-
+Raphson on the reciprocal square root, verified in Python before any
+assembly was written, bit-exact against the host `sqrt()` across 8 new
+vectors spanning `1.5e-10` to `1.5e10`. Slower than the old library call
+(980 (stub) → 14092-15385, no longer a `(stub)` approximation) but that's
+expected and not the point — zero AmigaOS dependency for this op now, at a
+real, fully-known cost instead of an excluded one.
+
+Next up in this row: `fetox`/`flogn` (foundational — unlocks `ftwotox`/
+`ftentox`'s general case, `flog2`/`flog10`, and `fsinh`/`fcosh`/`ftanh` as
+cheap derivations once native), then `fsin`/`fcos` (foundational for
+`ftan`/`fsincos`), then `fatan` (foundational for `fasin`/`facos` via
+`asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too). `#11`
+(fmovem bulk register move fix) remains untouched and fair game any time.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

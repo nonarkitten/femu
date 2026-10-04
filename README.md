@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 Not started | `perf/10-native-transcendentals` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt` done) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -699,12 +699,77 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 
 - **Idea:** Implement `facos`/`fasin`/`fatan`/`fcos`/`fcosh`/`fsin`/
   `fsinh`/`ftan`/`ftanh`/`fetox`/`flogn`/`flog2`/`flog10`/`fsincos`
-  without `mathieeedoubtrans.library`, building on the native
-  representation from `#4`.
+  (and, it turned out, `fsqrt`'s general case too — see below) without
+  `mathieeedoubtrans.library`, building on the native representation
+  from `#4`. Explicit motivation this time isn't raw speed (the user:
+  "I don't expect a huge win in performance") — it's dropping the
+  AmigaOS library dependency entirely, so this can in principle run
+  on any 68k target (Mac, Atari), not just Amiga.
 - **Depends on:** 1, 4
-- **Status:** 🔲 Not started
-- **Branch:** `perf/10-native-transcendentals`
-- **Result:** —
+- **Status:** 🔲 In progress (`fsqrt` done)
+- **Branch:** `claude/keen-mendel-3hb6vs`
+- **Result:** This row is far bigger than any other on the checklist
+  (14 functions named, several needing a real numerical algorithm, not
+  a bit-trick), so it's landing in pieces rather than one commit — each
+  piece fully implemented, verified, and measured on its own, same bar
+  as every other row, updated here as it goes rather than held back
+  until the whole row is done.
+
+  **Shared infrastructure** (`src/utils/nativemath.asm`): thin `jsr`/
+  `rts` wrappers — `NativeFadd`/`NativeFsub`/`NativeFmul`/`NativeFdiv`
+  — around the existing `FE_FADD`/`FE_FMUL`/`FE_FDIV` macros, letting
+  a transcendental's range-reduction/polynomial code chain several
+  arithmetic steps via plain calls instead of inlining each macro's
+  full body (`FE_FMUL` alone is well over 100 instructions) at every
+  step. This is deliberately the opposite choice from `FE_ADD`/
+  `FE_FMUL`/`FE_FDIV` themselves staying inlined macros at their own
+  hot call sites — `CLAUDE.md`'s "keep macros flat in hot paths"
+  cuts the other way for genuinely cold code chaining many steps,
+  which is exactly what every function in this row is.
+
+  **`fsqrt` (general case) — done.** The `#9` fast path for `0`/`+1`
+  stays; everything else now goes through `NativeFsqrt`
+  (`src/utils/nativemath.asm`): Newton-Raphson on the *reciprocal*
+  square root (`y := y*(1.5 - 0.5*m*y^2)`), which avoids `fdiv`
+  (expensive — `DIV64`'s 64+1-iteration loop) inside the iteration
+  entirely, at the cost of a division-free initial guess instead of a
+  division-based one. The operand's mantissa and exponent parity are
+  split so the iteration always runs on a value `m` in `[1,4)` with
+  *no mantissa bit-shifting* — doubling a normalized mantissa's bit
+  pattern directly doesn't fit back in 64 bits (the explicit bit would
+  shift out), but doubling its *value* is exactly "same bits, exponent
+  one higher," which is all the parity adjustment needs. Two exact,
+  trivial constants (`0.75`/`0.5`) serve as the initial guess depending
+  on that parity — verified in Python before writing any assembly that
+  a `y0=1.0` guess does *not* converge globally (diverges outright
+  for `m` near 4), while these two converge to within ~3 ULP of a
+  double-precision reference after 6 iterations across 1M+ random
+  samples spanning both ranges and their boundaries; 7 iterations are
+  used in the real implementation for the wider 64-bit mantissa's
+  extra precision headroom. Inf/NaN pass through unchanged (same
+  self-identical trick as the `0`/`+1` fast path); a negative finite
+  operand constructs a NaN (exponent all-ones, mantissa not the clean
+  Infinity pattern) rather than running the iteration on it.
+
+  **Measured** (`bench/`, register-direct, 8 new vectors spanning
+  `1.5e-10` to `1.5e10` and both exponent parities): every case
+  `MATCH`es the host `sqrt()` bit-exactly, including the pre-existing
+  `fsqrt(4.25)` vector, which now shows a real number instead of a
+  `(stub)` approximation — `980 (stub)` → **14092–15385** (no longer
+  `(stub)`: this is the *actual* now-measurable cost, not a smaller
+  number that excluded the real library's work). Slower than the old
+  library call's unmeasured stand-in, as expected and explicitly not
+  the point of this row — what's gained is running with zero AmigaOS
+  dependency for this op, correctly, at a real and now fully known
+  cost. All existing vectors and probes remain bit-exact elsewhere
+  (only the pre-existing, unrelated `flog2` 1-ULP discrepancy persists).
+
+  **Still to do in this row:** `fetox`/`flogn` (foundational — once
+  native, `ftwotox`/`ftentox`'s general case, `flog2`/`flog10`, and
+  `fsinh`/`fcosh`/`ftanh` all become cheap derivations rather than
+  needing their own algorithms), `fsin`/`fcos` (foundational for `ftan`/
+  `fsincos`), and `fatan` (foundational for `fasin`/`facos` via
+  `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too).
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move
