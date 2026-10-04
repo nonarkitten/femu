@@ -42,7 +42,7 @@ flog10              19957      MATCH  0.86033800657099369 vs 0.86033800657099369
 flogn               19488      MATCH  1.9810014688665833 vs 1.9810014688665833
 fsin                13636      MATCH  0.24740395925452294 vs 0.24740395925452294
 fsinh               32306      MATCH  2770.6931066087172 vs 2770.6931066087172
-ftan                  954      MATCH  0.96658293352388214 vs 0.96658293352388214 (stub)
+ftan                26570      MATCH  0.96658293352388214 vs 0.96658293352388214
 ftanh               37693      MATCH  0.99999013835680184 vs 0.99999013835680184
 fetox                 680      MATCH  1 vs 1
 flogn                 696      MATCH  0 vs 0
@@ -169,7 +169,7 @@ flog10              19957      MATCH  0.86033800657099369 vs 0.86033800657099369
 flogn               19488      MATCH  1.9810014688665833 vs 1.9810014688665833
 fsin                13636      MATCH  0.24740395925452294 vs 0.24740395925452294
 fsinh               32306      MATCH  2770.6931066087172 vs 2770.6931066087172
-ftan                  954      MATCH  0.96658293352388214 vs 0.96658293352388214 (stub)
+ftan                26570      MATCH  0.96658293352388214 vs 0.96658293352388214
 ftanh               37693      MATCH  0.99999013835680184 vs 0.99999013835680184
 fetox                 680      MATCH  1 vs 1
 flogn                 696      MATCH  0 vs 0
@@ -286,3 +286,7 @@ fmove.l (4,a0),fp0              907      MATCH  got 123456 (want 123456), a0 000
 fmove.w d0,fp0                  921      MATCH  got 4660 (want 4660) (stub)
 fmove.b d0,fp0                  909      MATCH  got 42 (want 42) (stub)
 fmove.l d0,fp0                  905      MATCH  got 123456 (want 123456) (stub)
+
+=== fsincos dual-register-write probe (checklist #10) ===
+op                               cycles       ok  note
+fsincos.x fp0,fp2:fp1             21793       ok  sin got 0.68163876002333412 (want 0.68163876002333412), cos got 0.7316888688738209 (want 0.7316888688738209)
