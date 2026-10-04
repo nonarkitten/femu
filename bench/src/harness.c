@@ -719,6 +719,46 @@ static void run_chain_probe(const struct image *img, const unsigned char *probe_
  * a real displacement word), so they're placed by explicit per-slot
  * length rather than load_slotted_opcodes' fixed 4-byte copy.
  */
+/* fsincos dual-register-write probe for checklist #10 -- neither
+ * vectors/ops.txt's single-result-register convention nor ops.asm's
+ * lockstep with it can express an op that writes two destination
+ * registers at once, same reasoning as fmove_probe.asm/
+ * ea_fastpath_probe.asm's own existence. Opcode comes from
+ * fsincos_probe.asm: "fsincos.x fp0,fp2:fp1" puts cos in fp2 and sin
+ * in fp1 (confirmed against GETREGISTER's own two bitfield offsets,
+ * not assumed from the mnemonic alone -- see that file's header
+ * comment). Reuses 0.75 as the test value, the same operand fsin/
+ * fcos's own vectors already cover, so "ok" here is really just
+ * confirming the write-back lands in the right two registers.
+ */
+static void run_fsincos_probe(const struct image *img)
+{
+	int done;
+	long cycles;
+	double got_sin, got_cos, want_sin, want_cos;
+
+	printf("\n=== fsincos dual-register-write probe (checklist #10) ===\n");
+	printf("%-24s %14s %8s  %s\n", "op", "cycles", "ok", "note");
+
+	mem_put_extended(img->reg_fpn + 0, 0.75);
+	want_sin = sin(0.75);
+	want_cos = cos(0.75);
+
+	cycles = run_one_opcode(img, 0, &done);
+	if (!done) {
+		printf("%-24s %14s %8s  TIMEOUT after %d steps\n",
+		       "fsincos.x fp0,fp2:fp1", "-", "-", MAX_STEPS);
+		return;
+	}
+
+	got_sin = mem_get_extended(img->reg_fpn + 12);
+	got_cos = mem_get_extended(img->reg_fpn + 24);
+	printf("%-24s %14ld %8s  sin got %.17g (want %.17g), cos got %.17g (want %.17g)\n",
+	       "fsincos.x fp0,fp2:fp1", cycles,
+	       (values_match(got_sin, want_sin) && values_match(got_cos, want_cos)) ? "ok" : "WRONG",
+	       got_sin, want_sin, got_cos, want_cos);
+}
+
 static void run_ea_fastpath_probe(const struct image *img, const unsigned char *probe_ops)
 {
 	static const char *names[6] = {
@@ -1020,6 +1060,33 @@ int main(int argc, char **argv)
 		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
 
 		run_ea_fastpath_probe(&img, probe_ops);
+	}
+
+	/* fsincos dual-register-write probe for checklist #10. */
+	{
+		struct image img;
+		unsigned char probe_ops[1 * 4];
+		size_t fsize = 0, probe_size;
+		FILE *pf;
+
+		pf = fopen("build/fsincos_probe.bin", "rb");
+		if (!pf) { fprintf(stderr, "bench: build/fsincos_probe.bin missing -- run make first\n"); return 1; }
+		probe_size = fread(probe_ops, 1, sizeof probe_ops, pf);
+		fclose(pf);
+		if (probe_size != sizeof probe_ops) {
+			fprintf(stderr, "bench: build/fsincos_probe.bin has the wrong size (%zu bytes, expected %zu)\n",
+			        probe_size, sizeof probe_ops);
+			return 1;
+		}
+
+		memset(mem, 0, MEM_SIZE);
+		load_binary(variant_paths[0], 0, &fsize);
+		parse_image_header(&img);
+		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
+		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
+		load_slotted_opcodes(TEST_CODE, probe_ops, 1);
+
+		run_fsincos_probe(&img);
 	}
 
 	return 0;

@@ -307,11 +307,25 @@ only diverged once a should-be-negative coefficient's wrong sign
 accumulated, pointing at the constants rather than the loop. Fixed by
 regenerating all 22 `SinC*`/`CosC*` constants with the sign restored.
 
+`ftan`/`fsincos` are also done now (see `README.md`'s `#10` row for
+the full writeup) -- both cheap derivations once `fsin`/`fcos` landed.
+`ftan(x)=sin(x)/cos(x)` costs nothing extra since `NativeFsincos`
+already returns sin/cos in exactly the dst/src layout `NativeFdiv`
+wants. `fsincos` calls `NativeFsincos` once and writes both results to
+the real 68881 opcode's two destination-register fields (sin/"FPs",
+cos/"FPc"), with a small dedicated probe (`fsincos_probe.asm`/
+`run_fsincos_probe`) added since -- like `fmove_probe.asm`'s own
+reason for existing -- a two-register write doesn't fit `vectors/
+ops.txt`'s single-result convention. Caught one real `vasm` error
+immediately (not a logic bug, a straight-up label collision): using
+`.IsNan` as a local label name in `fsincos.asm`'s own NaN branch
+collided with `SETCC`'s own internal `.IsNan:` label once both expand
+under the same `FsincosHandler` global scope -- renamed to `.GotNan`.
+
 Next up in this row: `fatan` (foundational for `fasin`/`facos` via
 `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too) is the
-one piece left that needs a real new algorithm. `ftan`/`fsincos` are
-now cheap derivations now that `fsin`/`fcos` are native. `#11` (fmovem
-bulk register move fix) remains untouched and fair game any time.
+one piece left that needs a real new algorithm. `#11` (fmovem bulk
+register move fix) remains untouched and fair game any time.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

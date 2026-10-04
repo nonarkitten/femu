@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (9/14 + `fsqrt` done — see row) | `claude/keen-mendel-3hb6vs` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (11/14 + `fsqrt` done — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -709,11 +709,9 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 - **Status:** 🔲 In progress. Done: `fsqrt` (found along the way, not
   one of the row's original 14), `fetox`, `flogn`, `ftwotox`,
   `ftentox`, `flog2`, `flog10`, `fsinh`, `fcosh`, `ftanh`, `fsin`,
-  `fcos`. Left: `fsincos`/`ftan`/`fatan`/`fasin`/`facos` — `fsincos`/
-  `ftan` are now cheap derivations once `fsin`/`fcos` landed, the
-  same way `ftwotox`/`ftentox`/`flog2`/`flog10` turned out to be once
-  `fetox`/`flogn` did; `fatan` is the one piece left needing a real
-  new algorithm, and `fasin`/`facos` derive from it once it lands.
+  `fcos`, `fsincos`, `ftan`. Left: `fatan`/`fasin`/`facos` — `fatan`
+  is the one piece left needing a real new algorithm; `fasin`/`facos`
+  derive from it once it lands (`asin(x)=atan(x/sqrt(1-x^2))`).
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -1031,12 +1029,47 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   probe in the suite remains bit-exact (only the already-explained
   `fcosh(9.43)` case persists).
 
+  **`ftan`/`fsincos` — done.** Both cheap derivations now that `fsin`/
+  `fcos` are native, no new algorithm needed. `ftan(x) = sin(x)/
+  cos(x)` — `NativeFsincos` conveniently already returns `sin(x)` in
+  `d0:d1:d2` and `cos(x)` in `d3:d4:d5`, the exact dst/src layout
+  `NativeFdiv` expects, so no scratch memory at all. `fsincos` calls
+  `NativeFsincos` once and writes both results back, instead of this
+  row's other ops' single write — the real 68881 `FSINCOS` opcode has
+  a second destination-register field ("FPc", for cosine) alongside
+  the normal one ("FPs", for sine), which `fsincos.asm` already
+  decoded correctly (inherited unchanged from the old library-based
+  version); only the special-case ladder (now producing both `sin`
+  and `cos` from one branch instead of `fsin.asm`/`fcos.asm`'s two
+  separate ones) and the `NativeFsincos` call itself are new. One
+  genuine assembly mistake caught immediately by `vasm` itself,
+  before any run: `fsincos.asm`'s own NaN-passthrough branch used
+  `.IsNan` as a local label name, which collides with `SETCC`'s own
+  internal `.IsNan:` label once both expand under the same enclosing
+  `FsincosHandler` global label (vasm: `error 75: label
+  <FsincosHandler .IsNan> redefined`) — renamed to `.GotNan`.
+
+  Since `fsincos` writes two destination registers, neither
+  `vectors/ops.txt`'s single-result convention nor `ops.asm`'s
+  lockstep with it can express it — same reasoning as `fmove_probe.asm`/
+  `ea_fastpath_probe.asm`'s own existence, so a small dedicated
+  `fsincos_probe.asm` + `run_fsincos_probe` (`bench/src/harness.c`)
+  were added instead, confirming `fp2:fp1` syntax really does put
+  cos in `fp2` and sin in `fp1` (checked against `GETREGISTER`'s own
+  two bitfield offsets rather than assumed from the mnemonic) and
+  that both land correctly for the same `0.75` operand `fsin`/`fcos`'s
+  own vectors already cover.
+
+  **Measured**: `ftan(3.91)` (the one pre-existing vector) now shows
+  a real measured cost instead of a `(stub)` approximation, bit-exact
+  against the host `tan()`. The new `fsincos` probe reports `ok`
+  (both registers match). Every other vector and probe in the suite
+  remains bit-exact (only the already-explained `fcosh(9.43)` case
+  persists).
+
   **Still to do in this row:** `fatan` (foundational for `fasin`/
   `facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is
   native too) is the one piece left that needs a real new algorithm.
-  `ftan`/`fsincos` are now cheap derivations (`tan(x)=sin(x)/cos(x)`;
-  `fsincos` can call `NativeFsincos` directly and keep both results)
-  now that `fsin`/`fcos` are native.
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move
