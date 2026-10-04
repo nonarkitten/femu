@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt`, `fetox`, `flogn`, `ftwotox`, `ftentox`, `flog2`, `flog10` done) | `claude/keen-mendel-3hb6vs` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (7/14 + `fsqrt` done — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -706,7 +706,13 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   AmigaOS library dependency entirely, so this can in principle run
   on any 68k target (Mac, Atari), not just Amiga.
 - **Depends on:** 1, 4
-- **Status:** 🔲 In progress (`fsqrt`, `fetox`, `flogn`, `ftwotox`, `ftentox`, `flog2`, `flog10` done)
+- **Status:** 🔲 In progress. Done: `fsqrt` (found along the way, not
+  one of the row's original 14), `fetox`, `flogn`, `ftwotox`,
+  `ftentox`, `flog2`, `flog10`, `fsinh`, `fcosh`, `ftanh`. Left:
+  `fsin`/`fcos`/`fsincos`/`ftan`/`fatan`/`fasin`/`facos` — several of
+  those are themselves cheap derivations once `fsin`/`fcos`/`fatan`
+  land, the same way `ftwotox`/`ftentox`/`flog2`/`flog10` turned out
+  to be once `fetox`/`flogn` did.
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -926,14 +932,51 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   vector, with no `flog2`/`flog10`/`ftwotox`/`ftentox` discrepancy left
   anywhere in the suite.
 
-  **Still to do in this row:** `fsinh`/`fcosh`/`ftanh` are the same
-  kind of cheap derivation from `fetox` (`sinh(x)=(e^x-e^-x)/2`,
-  `cosh(x)=(e^x+e^-x)/2`, `tanh(x)=sinh(x)/cosh(x)` or the numerically
-  steadier `1-2/(e^(2x)+1)` form) and are fair game any time. `fsin`/
-  `fcos` (foundational for `ftan`/`fsincos`) and `fatan` (foundational
-  for `fasin`/`facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that
-  `fsqrt` is native too) are the two rows left that need a real new
-  algorithm rather than a derivation.
+  **`fsinh`/`fcosh`/`ftanh` — done.** All three derive directly from
+  `fetox`'s `NativeFexp`, computing both `e^x` and `e^-x` and
+  combining: `sinh(x)=(e^x-e^-x)/2`, `cosh(x)=(e^x+e^-x)/2`,
+  `tanh(x)=(e^x-e^-x)/(e^x+e^-x)` (the `/2` implicit in sinh/cosh's own
+  definitions cancels in `tanh`'s ratio, so it's never computed there
+  at all). The `/2` in `fsinh`/`fcosh` is a plain exponent decrement
+  (the inverse of the exponent-bump technique this row already uses
+  elsewhere), not a multiply -- but unlike every *other* final bump in
+  this row, `fsinh`'s result isn't guaranteed positive (sinh is odd),
+  so its sign has to be extracted and reinserted around the decrement
+  (`bfextu`/`bfins`, the bit0-right-justified convention those two
+  instructions actually agree on -- see `fadd.asm`'s own `MainBody`
+  for the same pairing, and `nativemath.asm`'s header comment for why
+  the *other* convention, "sign `& $80000000`", does **not** pair
+  safely with `bfins`; that mismatch is the exact bug `fadd`/`fsub`
+  shipped with until `#10` part 2 caught it). `fcosh`'s own `/2` skips
+  that, since both `e^x` and `e^-x` are always positive.
+
+  Each op's special cases reflect its own symmetry rather than copying
+  fetox's ladder verbatim: `fsinh` (odd) has zero *and* Inf
+  self-identical for either sign, and even collapses Inf/NaN into one
+  check (a NaN is self-identical here too, same bits back out being
+  correct for a NaN regardless of which function it passed through);
+  `fcosh` (even) constructs `1.0` at zero and forces `+Inf` regardless
+  of the input's sign; `ftanh` (odd, bounded) is self-identical at
+  zero but constructs `+-1` at `+-Inf` (sign kept, magnitude replaced).
+  An actual NaN passes through unchanged in all three.
+
+  **Measured** (`bench/`, register-direct, 12 new vectors: a negative
+  operand and all of zero/`+Inf`/`-Inf` for each of the three ops):
+  every case `MATCH`es the host `sinh()`/`cosh()`/`tanh()` bit-exactly.
+  The one pre-existing vector that doesn't, `fcosh(9.43)`
+  (`6228.263405943806` vs the host's `6228.2634059438069`), is a real
+  1-ULP difference but not a bug on this side: computed against an
+  80-digit exact `Decimal` reference, the true value is
+  `6228.26340594380641271...`, which our result is *closer* to
+  (`4.13e-13` away) than the host's own `cosh()` is (`5.87e-13` away)
+  -- the host libm itself has the 1-ULP error here, not femu. Every
+  other vector and probe in the suite remains bit-exact.
+
+  **Still to do in this row:** `fsin`/`fcos` (foundational for `ftan`/
+  `fsincos`) and `fatan` (foundational for `fasin`/`facos` via
+  `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too) are
+  the two pieces left that need a real new algorithm rather than a
+  derivation.
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move

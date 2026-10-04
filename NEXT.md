@@ -274,12 +274,23 @@ glibc's direct `log2()`) is simply gone now that `flog2` computes
 `ln(x)*(1/ln(2))` instead — the whole bench suite is bit-exact with no
 discrepancies left anywhere, for the first time this session.
 
-Next up in this row: `fsinh`/`fcosh`/`ftanh` are the same kind of cheap
-derivation from `fetox` and are fair game any time. `fsin`/`fcos`
-(foundational for `ftan`/`fsincos`) and `fatan` (foundational for
-`fasin`/`facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is
-native too) are the two rows left that need a real new algorithm. `#11`
-(fmovem bulk register move fix) remains untouched and fair game any time.
+`fsinh`/`fcosh`/`ftanh` are also done now (see `README.md`'s `#10` row
+for the full writeup): all three derive from `fetox`'s `NativeFexp`,
+computing `e^x` and `e^-x` and combining (`sinh=(e^x-e^-x)/2`,
+`cosh=(e^x+e^-x)/2`, `tanh=(e^x-e^-x)/(e^x+e^-x)` -- the `/2` cancels
+in tanh's ratio, so it's never computed there). Each op's special-case
+ladder reflects its own symmetry (odd/even/bounded) rather than reusing
+fetox's verbatim. One pre-existing vector, `fcosh(9.43)`, shows a real
+1-ULP difference from the host reference, but checked against an
+80-digit exact `Decimal` value, femu's answer is the one actually
+closer to the truth -- the host libm has the error here, not us.
+
+Next up in this row: `fsin`/`fcos` (foundational for `ftan`/`fsincos`)
+and `fatan` (foundational for `fasin`/`facos` via
+`asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too) are the
+two pieces left that need a real new algorithm rather than a
+derivation. `#11` (fmovem bulk register move fix) remains untouched
+and fair game any time.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

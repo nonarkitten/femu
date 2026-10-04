@@ -110,3 +110,15 @@
 	flog10.x	fp0,fp0
 	flog10.x	fp0,fp0
 	flog10.x	fp0,fp0
+	fsinh.x		fp0,fp0
+	fsinh.x		fp0,fp0
+	fsinh.x		fp0,fp0
+	fsinh.x		fp0,fp0
+	fcosh.x		fp0,fp0
+	fcosh.x		fp0,fp0
+	fcosh.x		fp0,fp0
+	fcosh.x		fp0,fp0
+	ftanh.x		fp0,fp0
+	ftanh.x		fp0,fp0
+	ftanh.x		fp0,fp0
+	ftanh.x		fp0,fp0
