@@ -84,11 +84,44 @@ FE_FDIV macro
 	.SrcExpNoZ:
 
 	.MainBody:
-	; Sign = XOR of the operand signs, stashed to memory now since
-	; every register from here on is needed for the divide itself.
+	; Sign = XOR of the operand signs, computed now that both operands
+	; are known ordinary (fast-path range check above). Stashed to
+	; memory below, once the fast path (checklist #9) below has had
+	; its chance to use it directly -- every register is needed for
+	; the real divide once that's ruled out.
 	move.l			d0,d6
 	eor.l			d3,d6
 	and.l			#$80000000,d6
+
+	; Fast path (checklist #9): divide by src == +-1 or by a clean
+	; power of two skips DIV64's 64+1-iteration loop entirely -- only
+	; the mantissa shape is left to check (d4/d5 read before the
+	; bfextu below destroys d3's word0).
+	cmp.l			#$80000000,d4
+	bne.s			.NotPow2
+	tst.l			d5
+	bne.s			.NotPow2
+	cmp.l			#$3fff0000,d3
+	bne.s			.PowNotOne
+	; src == +-1 exactly -- result is dst with its sign replaced by
+	; the XOR'd sign above; mantissa/exponent (d0/d1/d2) untouched.
+	and.l			#$7fffffff,d0
+	or.l			d6,d0
+	bra.w			.Done
+	.PowNotOne:
+	; src == +-2^k, k!=0 -- result mantissa is dst's unchanged; the
+	; exponent moves the opposite direction multiply's does (src is
+	; the divisor here), same arithmetic the slow path below would do.
+	bfextu			d0{1:15},d0
+	bfextu			d3{1:15},d3
+	sub.w			d3,d0
+	add.w			#16383,d0
+	lsl.l			#8,d0
+	lsl.l			#8,d0
+	or.l			d6,d0
+	bra.w			.Done
+	.NotPow2:
+
 	move.l			d6,DivSign
 
 	; Combined (biased) exponent, before any renormalization below

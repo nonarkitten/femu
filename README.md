@@ -93,7 +93,7 @@ result) in [Checklist details](#checklist-details) below.
 | [6](#row-6) | FPU-opcode chaining (skip trap exit/re-entry between back-to-back ops) | 0 | ✅ Done | `perf/06-opcode-chaining` |
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
-| [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | 🔲 Not started | `perf/09-transcendental-fastpaths` |
+| [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 Not started | `perf/10-native-transcendentals` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 
@@ -597,9 +597,101 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   `fetox`/`flogn` at 0/1, multiply/divide by 0/1/power-of-two, `fsqrt` at
   0/1.
 - **Depends on:** 1
-- **Status:** 🔲 Not started
-- **Branch:** `perf/09-transcendental-fastpaths`
-- **Result:** —
+- **Status:** ✅ Done (`ftentox` scoped out)
+- **Branch:** `claude/keen-mendel-3hb6vs`
+- **Result:** Every fast path here skips the slow library `jsr`
+  (`fetox`/`flogn`/`fsqrt`/`ftwotox`) or the heavy native loop
+  (`fmul`/`fdiv`'s `MUL64`/`DIV64`) entirely for its special case,
+  landing on a result built from a handful of register ops instead —
+  not a cheaper call, no call at all.
+
+  **`ftwotox` with an integer operand:** for `2^x` with `x` an exact
+  integer small enough that `16383+x` still fits the result's 15-bit
+  exponent field, the result is exactly sign=0, exponent=`16383+x`,
+  mantissa=explicit-bit-only — no `InternalToDouble`, no library `Pow`
+  call. Checked, not assumed: verified against an independent exact-
+  `Fraction` reference in Python (0/200000 random cases + boundary
+  cases up to `+-32767`) before writing the `src/ops/ftwotox.asm`
+  assembly. Falls through unchanged to the existing slow path for
+  anything not a small integer — including `|x|<1` (only `x=0` could
+  ever qualify, and 0 isn't reached this way) and anything whose
+  exponent-bump would itself overflow the 15-bit field, both rare and
+  already handled (however that turns out) by the untouched slow path.
+
+  **`ftentox` is explicitly NOT given the same treatment** — "bump the
+  exponent field" is a base-2 trick (it multiplies by a power of 2);
+  it does not generalize to base 10 (`10^x` is not an exponent-field
+  operation on a binary float). A correct fast path for `ftentox`'s
+  integer case would need something structurally different — binary
+  exponentiation using the constant ROM's existing powers-of-ten
+  entries (`CCC` in `src/utils/fpu.asm`), chaining several `FE_FMUL`
+  calls with sign handling for negative exponents — real, but a
+  meaningfully larger and separately-riskier piece of work than
+  anything else in this row, not an "easy" fast path. Left as a
+  candidate follow-up, not blocking this row.
+
+  **`fetox`/`flogn` at their identity argument:** `fetox(0) = 1.0`
+  and `flogn(1) = 0.0` exactly, for either sign of zero on the
+  `fetox` side (consistent with the denormal-as-zero convention
+  `FE_FADD`/`FE_FMUL`/`FE_FDIV`'s own ladders already use — exponent
+  field zero is the complete zero test); `flogn`'s one-check requires
+  sign clear (`-1.0` is deliberately excluded: `ln(-1)` is `NaN`, not
+  `0`).
+
+  **`fsqrt` at 0/1:** `sqrt(0) = 0` and `sqrt(+1) = +1` are both
+  exactly *self-identical* results, so the fast path is a pure
+  pass-through — `d0`/`d1`/`d2` aren't even written, just left as
+  `GETEAVALUE` produced them. The zero check ignores sign (`sqrt(-0)
+  = -0`, still self-identical); the one check requires sign clear
+  (`-1.0` excluded: `sqrt(-1)` is `NaN`, not `-1`).
+
+  **`fmul`/`fdiv` by `+-1` or by a clean power of two:** inserted into
+  `FE_FMUL`/`FE_FDIV`'s `.MainBody`, right after the sign is computed
+  and before the exponent/mantissa work the real multiply/divide
+  needs, so it only has to check whether `src`'s mantissa is
+  explicit-bit-only (checking `src`, i.e. "multiply/divide BY X", not
+  `dst` — multiplication's own commutativity would make a `dst`-side
+  check equally valid, but that doubles the checking for a case this
+  row's own phrasing doesn't ask for, so it's left out). `src == +-1`
+  returns `dst` with its sign replaced by the already-computed XOR'd
+  sign, mantissa/exponent untouched — skips everything. `src == +-2^k`
+  (`k != 0`) returns `dst`'s mantissa untouched with the exponent
+  moved by `k` — skips `MUL64`'s four `mulu.l`s or `DIV64`'s 64+1-
+  iteration loop, but still needs the same combined-exponent
+  arithmetic the slow path would've done anyway (so the win is purely
+  "no multiply/divide", not "no exponent math too"). `multiply/divide
+  by 0` needed no new code at all — `FE_FMUL`/`FE_FDIV`'s existing
+  special-case ladder (from `#1`/`#3`) already short-circuits a zero
+  operand.
+
+  **Measured** (`bench/`, register-direct; new rows added to
+  `vectors/ops.txt`/`src/ops.asm` in their established lockstep
+  convention, since every case here is register-to-register — no new
+  probe infrastructure needed): `fetox(0)` **680** vs `fetox(3.66)`
+  (ordinary, slow path) **968** — and the 680 is now a *real* number,
+  not a `(stub)` approximation, since the library call is skipped
+  entirely. `flogn(1)` **696** vs `flogn(7.25)` **966**. `fsqrt(0)`
+  **668**, `fsqrt(1)` **686**, vs `fsqrt(4.25)` **980**. `ftwotox(3)`
+  and `ftwotox(-2)` both **784** vs `ftwotox(12.5)` (non-integer, slow
+  path) **1030**. `fmul(-3.5, 2.0)` (power-of-two, already in the
+  existing vector set) **1200 → 862** (−338); `fmul(5.5, 1.0)`
+  (exactly-one, new vector) **836** (the slightly bigger win over
+  power-of-two makes sense — no exponent recombine needed either).
+  `fdiv(-4.0, 2.0)` and `fdiv(100.0, 4.0)` (power-of-two, already in
+  the existing vector set) **5744 → 862** (−4882 — `fdiv`'s fast path
+  is the single biggest win in this row, unsurprising given `DIV64`'s
+  cost); `fdiv(5.5, 1.0)` (exactly-one, new vector) **836**.
+  `fdiv(100.0, 0.5)` (power-of-two with a *negative* exponent
+  difference, new vector) **862**, confirming the exponent-move
+  direction is right for that case too. Every ordinary (non-special)
+  `fmul`/`fdiv`/`fetox`/`flogn`/`fsqrt` vector pays a small, flat,
+  unavoidable tax for the new checks when they don't match — `fmul`/
+  `fdiv` +12, `fetox`/`flogn` +12-14, `fsqrt` +26 (two separate
+  checks), `ftwotox` +64 on a non-integer operand (the most checks of
+  any case here, since it has to rule out both "too large" and "has
+  fractional mantissa bits" before giving up) — all measured, not
+  estimated, and all bit-exact (`MATCH`) against the host reference,
+  including every pre-existing vector.
 
 <a id="row-10"></a>
 #### #10 — Native transcendentals

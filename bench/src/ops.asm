@@ -57,3 +57,13 @@
 	fsinh.x		fp0,fp0
 	ftan.x		fp0,fp0
 	ftanh.x		fp0,fp0
+	fetox.x		fp0,fp0
+	flogn.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	fsqrt.x		fp0,fp0
+	ftwotox.x	fp0,fp0
+	ftwotox.x	fp0,fp0
+	fmul.x		fp1,fp0
+	fdiv.x		fp1,fp0
+	fmul.x		fp1,fp0
+	fdiv.x		fp1,fp0
