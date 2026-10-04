@@ -47,6 +47,14 @@ fsqrt    4.25     -
 facos    0.72     -
 fasin    0.71     -
 fatan    2.25     -
+fatan    -2.25    -
+fatan    0.6      -
+fatan    -0.6     -
+fatan    0.3      -
+fatan    -0.3     -
+fatan    0.0      -
+fatan    inf      -
+fatan    -inf     -
 fcos     0.75     -
 fcosh    9.43     -
 fetox    3.66     -
