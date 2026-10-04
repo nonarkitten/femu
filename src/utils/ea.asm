@@ -242,41 +242,139 @@ GetEaValue
 	rts
 	.NoRegReg:
 
-	; Jump to data format specific getter
+	; EA-decode fast path (checklist #8): Dn, (An), (An)+, -(An) and
+	; (d16,An) -- the modes real FPU code overwhelmingly uses --
+	; computed directly here instead of through a nested jsr GetEa.
+	; Every GETEAVALUE caller funnels through this one spot for a
+	; memory operand, so resolving a0 once here (rather than once per
+	; data-length handler below, each of which used to do its own
+	; jsr GetEa) removes a whole subroutine call -- entry/exit overhead
+	; plus GetEa's own redundant re-check of the register-to-register
+	; bit this routine already ruled out above -- for the common case.
+	; d0 is still this routine's own "data length in bytes" input,
+	; untouched since entry, exactly what EaDnDirect/EaAnIndirectPostinc/
+	; EaAnIndirectPredec's bodies below need (copied from their GetEa
+	; originals, not shared with them -- a second caller showed up, so
+	; per CLAUDE.md this earns the copy rather than a shared indirection).
+	;
+	; Dispatches on the 3-bit MODE field alone via a small jump table,
+	; deliberately NOT a linear cmp/bcc chain over the modes -- an
+	; earlier version of this tried that and, measured against the old
+	; jsr GetEa path, came out *slower* for (An)+/-(An)/(d16,An): each
+	; sits further down the chain than (An), so it paid for every
+	; earlier mode's comparison on top of its own, outweighing the
+	; call it avoided. A jump table costs the same two instructions
+	; (bfextu+jmp) to reach ANY mode, matching GetEa's own dispatch
+	; shape, so the only thing this removes is the call/return pair and
+	; the redundant bit-14 recheck -- a real, uniform win, not a
+	; swap of one overhead for a worse one. See README.md's #8 row for
+	; both measurements.
+	;
+	; (An)+/-(An) with register 7 (sp) fall through to the slow path:
+	; GetEa's EaAnIndirectPostincSp/PredecSp need the heavier STACKSR/
+	; STACKSL stack-shift loops for the user-mode case, not worth
+	; duplicating here for what's already a rare addressing choice for
+	; an FP operand. Mode 001 (An direct, unsupported for an FP operand)
+	; and modes 110/111 (indexed, memory-indirect, absolute, PC-
+	; relative, immediate) fall through unchanged to the general GetEa.
+	bfextu			INSTRUCTION{10:3},d1
+	jmp				(EaFastModeVectors,d1.w*4)
+
+	EaFastModeVectors:
+	bra.w			.FastDn				; 000 Dn
+	bra.w			.Slow				; 001 An direct (unsupported)
+	bra.w			.FastAn				; 010 (An)
+	bra.w			.FastPostinc		; 011 (An)+
+	bra.w			.FastPredec			; 100 -(An)
+	bra.w			.FastDisplace		; 101 (d16,An)
+	bra.w			.Slow				; 110 (An) with index
+	bra.w			.Slow				; 111 other modes
+
+	.FastDn:
+	GETEAREGISTER	d1
+	move.l			STACKFRAME,a0
+	suba.l			#64,a0
+	adda.l			d1,a0
+	cmp.b			#1,d0
+	bne.s			.FastDnNoByte
+	adda.l			#3,a0
+	bra.w			.EaDone
+	.FastDnNoByte:
+	cmp.b			#2,d0
+	bne.w			.EaDone
+	adda.l			#2,a0
+	bra.w			.EaDone
+
+	.FastAn:
+	GETEAREGISTER	d1
+	move.l			(OSTACKAN,STACKFRAME,d1.w),a0
+	bra.w			.EaDone
+
+	.FastPostinc:
+	bfextu			INSTRUCTION{13:3},d6
+	cmp.b			#7,d6
+	beq.w			.Slow
+	move.b			d6,d1
+	lsl.b			#2,d1
+	move.l			(OSTACKAN,STACKFRAME,d1.w),a0
+	add.l			d0,(OSTACKAN,STACKFRAME,d1.w)
+	bra.w			.EaDone
+
+	.FastPredec:
+	bfextu			INSTRUCTION{13:3},d6
+	cmp.b			#7,d6
+	beq.w			.Slow
+	move.b			d6,d1
+	lsl.b			#2,d1
+	sub.l			d0,(OSTACKAN,STACKFRAME,d1.w)
+	move.l			(OSTACKAN,STACKFRAME,d1.w),a0
+	bra.w			.EaDone
+
+	.FastDisplace:
+	GETEAREGISTER	d1
+	move.l			(OSTACKAN,STACKFRAME,d1.w),a0
+	move.w			(FAULTPC),d1
+	ext.l			d1
+	adda.l			d1,a0
+	INREMENTPC		#$02
+	bra.w			.EaDone
+
+	.Slow:
+	jsr				GetEa
+	.EaDone:
+
+	; Jump to data format specific getter -- a0 is already resolved by
+	; the fast/slow EA computation above, so none of these call GetEa
+	; themselves any more.
 	bfextu			INSTRUCTION{19:3},d1
 	jmp				(GetEaValueVectors,d1.w*4)
 
 	; Byte
 	GetEaValueByte:
-	jsr				GetEa
 	move.b			(a0),d0
 	jsr				ByteToInternal
 	rts
 
 	; Word
 	GetEaValueWord:
-	jsr				GetEa
 	move.w			(a0),d0
 	jsr				WordToInternal
 	rts
 
 	; Long
 	GetEaValueLong:
-	jsr				GetEa
 	move.l			(a0),d0
 	jsr				LongToInternal
 	rts
 
 	; Single
 	GetEaValueSingle:
-	jsr				GetEa
 	move.l			(a0),d0
 	jsr				SingleToInternal
 	rts
 
 	; Double
 	GetEaValueDouble:
-	jsr				GetEa
 	movem.l			(a0),d0/d1
 	jsr				DoubleToInternal
 	rts
@@ -284,13 +382,11 @@ GetEaValue
 	; Extended: memory layout is byte-identical to the internal format
 	; (checklist #4's whole point) -- straight copy, no conversion call.
 	GetEaValueExtended:
-	jsr				GetEa
 	movem.l			(a0),d0/d1/d2
 	rts
 
 	; Packed
 	GetEaValuePacked:
-	jsr				GetEa
 	movem.l			(a0),d0/d1/d2
 	jsr				PackedToInternal
 	rts

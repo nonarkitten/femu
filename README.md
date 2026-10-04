@@ -92,7 +92,7 @@ result) in [Checklist details](#checklist-details) below.
 | [5](#row-5) | Force-single-precision fast path | 1 | ✅ Done (`fmul`/`fdiv` only) | `claude/keen-mendel-3hb6vs` |
 | [6](#row-6) | FPU-opcode chaining (skip trap exit/re-entry between back-to-back ops) | 0 | ✅ Done | `perf/06-opcode-chaining` |
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
-| [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | 🔲 Not started | `perf/08-ea-fastpath` |
+| [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | 🔲 Not started | `perf/09-transcendental-fastpaths` |
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 Not started | `perf/10-native-transcendentals` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
@@ -530,9 +530,64 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   `-(An)`, `d16(An)`), falling through to the existing general decoder for
   everything else.
 - **Depends on:** 0
-- **Status:** 🔲 Not started
-- **Branch:** `perf/08-ea-fastpath`
-- **Result:** —
+- **Status:** ✅ Done
+- **Branch:** `claude/keen-mendel-3hb6vs`
+- **Result:** `GetEaValue` (`src/utils/ea.asm`) is the single place every
+  `GETEAVALUE` caller funnels through for a memory operand; it used to
+  dispatch on data length only, then each of its 7 format handlers did
+  its own `jsr GetEa` (a second, nested subroutine call, complete with
+  `GetEa`'s own redundant re-check of the register-to-register bit
+  `GetEaValue` had already ruled out). The fast path resolves the
+  address **once**, inline, right in `GetEaValue`, for the 5 common
+  modes — removing that whole nested call for them — and falls through
+  completely unchanged to the existing `jsr GetEa` for everything else
+  (indexed, memory-indirect, absolute, PC-relative, immediate, and
+  mode 001's unsupported `An` direct). `(An)+`/`-(An)` with register 7
+  (`sp`) also fall through to the slow path: `GetEa`'s
+  `EaAnIndirectPostincSp`/`PredecSp` need the heavier `STACKSR`/
+  `STACKSL` stack-shift loops for the user-mode case, not worth
+  duplicating here for what's already a rare addressing choice for an
+  FP operand.
+
+  **A real design mistake, caught by measuring rather than assumed
+  correct from the logic alone:** the first version dispatched the 5
+  fast modes with a linear `cmp`/`bcc` chain (check Dn, else check An,
+  else check `(An)+`, ...). Measured against the *old* `jsr GetEa`
+  path, `(An)+`/`-(An)`/`(d16,An)` came out **slower**, not faster —
+  each sits further down the chain than `(An)`, so it paid for every
+  earlier mode's comparison on top of its own, outweighing the call it
+  saved. Fixed by dispatching on the 3-bit mode field through a small
+  jump table instead (mirroring `GetEa`'s own dispatch shape: `bfextu`
+  + `jmp`, O(1) to reach any mode), so the *only* thing the fast path
+  removes is the call/return pair and the redundant bit-14 recheck — a
+  uniform win instead of a chain-position-dependent one. A further
+  micro-optimization in `.FastPostinc`/`.FastPredec` (needed to check
+  for `sp` before committing to the fast path) replaces a second
+  `bfextu` re-extraction of the register field with a cheaper `move.b`
+  off the one `bfextu` already done for the `sp` check — small, but
+  free once noticed.
+
+  **Measured** (`bench/`'s existing `fmove` memory-operand probe for
+  `(An)`, plus a new dedicated EA-fast-path probe — `bench/src/
+  ea_fastpath_probe.asm` — for `(An)+`/`-(An)`/`(d16,An)`/`Dn` direct at
+  all three of its size-adjusted widths, covering what the existing
+  probes didn't; "before" numbers for the new probe's rows were
+  captured by temporarily reverting just `ea.asm` and rerunning it,
+  since those rows didn't exist in any prior baseline): `fmove.x
+  (a0),fp0` 736 → **719** (−17), `fmove.d (a0),fp0` 881 → **864** (−17),
+  `fmove.l (a0)+,fp0` 921 → **916** (−5), `fmove.l -(a0),fp0` 923 →
+  **918** (−5), `fmove.l (4,a0),fp0` 924 → **907** (−17), `fmove.w
+  d0,fp0` 936 → **921** (−15), `fmove.b d0,fp0` 926 → **909** (−17),
+  `fmove.l d0,fp0` 932 → **905** (−27). Every fast-pathed mode is a
+  real, bit-exact win — none a wash, none a regression — with `(An)+`/
+  `-(An)` the smallest (the `sp`-exclusion check's cost eats into their
+  savings the most) and Dn-direct long the largest (no extension word,
+  no stack-shift check at all). All existing register-direct vectors
+  and every other probe remain bit-exact (`MATCH`/`ok`) on both
+  `femu.020` and `femu.020m` — this only touches `GetEaValue`'s own
+  code and `GETEA`'s other 6 callers (`fmove`/`fmovem`/`fsave`/
+  `frestore`/`fmovefpcr`/`fscc`) are untouched, since they call `GetEa`
+  directly and never went through `GetEaValue` at all.
 
 <a id="row-9"></a>
 #### #9 — Transcendental fast paths for cheap special cases

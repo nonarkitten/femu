@@ -93,9 +93,9 @@ ftanh                 954      MATCH  0.99999013835680184 vs 0.99999013835680184
 
 === fmove/fmovem memory-operand probe (checklist #4) ===
 op                               cycles       ok  note
-fmove.x (a0),fp0                    736       ok  got 1.5, want 1.5
+fmove.x (a0),fp0                    719       ok  got 1.5, want 1.5
 fmove.x fp0,(a0)                    650       ok  got 1.5, want 1.5
-fmove.d (a0),fp0                    881       ok  got 1.5, want 1.5
+fmove.d (a0),fp0                    864       ok  got 1.5, want 1.5
 fmove.d fp0,(a0)                    791       ok  got 1.5, want 1.5
 fmovem.x (a0),fp0-fp3               975       ok  fp0-fp3 got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
 fmovem.x fp0-fp3,(a0)               975       ok  mem got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
@@ -115,3 +115,12 @@ fadd,fadd (chain of 2)                   1661      MATCH  8 vs 8
 fadd,fmul (chain of 2)                   1860      MATCH  15 vs 15
 fadd,fadd,fadd (chain of 3)              2345      MATCH  11 vs 11
 fadd,nop (must NOT chain)                 951      MATCH  5 vs 5
+
+=== EA-decode fast-path probe (checklist #8) ===
+op                           cycles      match  note
+fmove.l (a0)+,fp0               916      MATCH  got 123456 (want 123456), a0 00060004 (want 00060004) (stub)
+fmove.l -(a0),fp0               918      MATCH  got -123456 (want -123456), a0 0005fffc (want 0005fffc) (stub)
+fmove.l (4,a0),fp0              907      MATCH  got 123456 (want 123456), a0 00060000 (want 00060000) (stub)
+fmove.w d0,fp0                  921      MATCH  got 4660 (want 4660) (stub)
+fmove.b d0,fp0                  909      MATCH  got 42 (want 42) (stub)
+fmove.l d0,fp0                  905      MATCH  got 123456 (want 123456) (stub)

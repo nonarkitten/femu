@@ -416,9 +416,9 @@ static double reference(const char *op, double a, double b)
  */
 static unsigned char forced_fpcr_mode;
 
-static long run_one_opcode(const struct image *img, unsigned slot, int *done_out)
+static long run_one_opcode_len(const struct image *img, unsigned slot, unsigned instr_len, int *done_out)
 {
-	unsigned test_pc = TEST_CODE + slot * SLOT_STRIDE, resume_pc = test_pc + 4;
+	unsigned test_pc = TEST_CODE + slot * SLOT_STRIDE, resume_pc = test_pc + instr_len;
 	long total_cycles = 0;
 	int step;
 
@@ -444,6 +444,16 @@ static long run_one_opcode(const struct image *img, unsigned slot, int *done_out
 	}
 	*done_out = 0;
 	return total_cycles;
+}
+
+/* Every existing probe's opcodes are plain 4-byte F-line instructions
+ * (no extension words) -- this is the convenience wrapper they keep
+ * using. Checklist #8's probe needs the explicit-length form below
+ * since (d16,An) is 6 bytes (a displacement word makes it so).
+ */
+static long run_one_opcode(const struct image *img, unsigned slot, int *done_out)
+{
+	return run_one_opcode_len(img, slot, 4, done_out);
 }
 
 /* Checklist item #4's post-implementation probe: RegFpn is now the
@@ -684,6 +694,101 @@ static void run_chain_probe(const struct image *img, const unsigned char *probe_
 	}
 }
 
+/* Checklist item #8's EA-decode fast-path probe: the four addressing
+ * modes GetEaValue's new inline fast path (src/utils/ea.asm) handles
+ * that fmove_probe.asm's plain (a0) doesn't already cover -- (a0)+,
+ * -(a0), (4,a0), and Dn direct at all three of its size-adjusted
+ * widths (word/byte/long, exercising EaDnDirect's +2/+3 pointer
+ * adjustment). Each slot gets its own fixed setup/checks below rather
+ * than a shared loop, since what's being verified differs per mode
+ * (a0 itself advances for postinc/predec, must NOT move for
+ * displacement, and the Dn-direct rows read d0 instead of memory at
+ * all). Opcodes come from ea_fastpath_probe.asm; unlike every other
+ * probe here they are NOT uniform 4-byte instructions ((4,a0) is 6,
+ * a real displacement word), so they're placed by explicit per-slot
+ * length rather than load_slotted_opcodes' fixed 4-byte copy.
+ */
+static void run_ea_fastpath_probe(const struct image *img, const unsigned char *probe_ops)
+{
+	static const char *names[6] = {
+		"fmove.l (a0)+,fp0", "fmove.l -(a0),fp0", "fmove.l (4,a0),fp0",
+		"fmove.w d0,fp0", "fmove.b d0,fp0", "fmove.l d0,fp0",
+	};
+	static const unsigned lens[6] = { 4, 4, 6, 4, 4, 4 };
+	int i, done, raw_off = 0;
+	long cycles;
+	double got, expected;
+	unsigned a0_after, a0_expected;
+
+	printf("\n=== EA-decode fast-path probe (checklist #8) ===\n");
+	printf("%-20s %14s %10s  %s\n", "op", "cycles", "match", "note");
+
+	for (i = 0; i < 6; i++)
+		memcpy(mem + TEST_CODE + (unsigned)i * SLOT_STRIDE, probe_ops + raw_off, lens[i]), raw_off += lens[i];
+
+	for (i = 0; i < 6; i++) {
+		a0_expected = EA_BUF;
+		switch (i) {
+		case 0: /* (a0)+ : value at EA_BUF, a0 advances by 4 */
+			wr_long(EA_BUF, 0x0001E240u); /* 123456 */
+			expected = 123456.0;
+			a0_expected = EA_BUF + 4;
+			break;
+		case 1: /* -(a0) : a0 predecrements first, value at EA_BUF-4 */
+			wr_long(EA_BUF - 4, 0xFFFE1DC0u); /* -123456 */
+			expected = -123456.0;
+			a0_expected = EA_BUF - 4;
+			break;
+		case 2: /* (4,a0) : value at EA_BUF+4, a0 unchanged */
+			wr_long(EA_BUF + 4, 0x0001E240u); /* 123456 */
+			expected = 123456.0;
+			a0_expected = EA_BUF;
+			break;
+		case 3: /* Dn direct, word: low 16 bits of d0 */
+			m68k_set_reg(M68K_REG_D0, 0x11111234u); /* low word 0x1234 = 4660 */
+			expected = 4660.0;
+			break;
+		case 4: /* Dn direct, byte: low 8 bits of d0 */
+			m68k_set_reg(M68K_REG_D0, 0x1111112Au); /* low byte 0x2a = 42 */
+			expected = 42.0;
+			break;
+		case 5: /* Dn direct, long: all 32 bits of d0 */
+			m68k_set_reg(M68K_REG_D0, 123456u);
+			expected = 123456.0;
+			break;
+		}
+
+		cycles = run_one_opcode_len(img, (unsigned)i, lens[i], &done);
+		if (!done) {
+			printf("%-20s %14s %10s  TIMEOUT after %d steps\n",
+			       names[i], "-", "-", MAX_STEPS);
+			continue;
+		}
+
+		got = mem_get_extended(img->reg_fpn + 0);
+		a0_after = (unsigned)m68k_get_reg(NULL, M68K_REG_A0);
+
+		/* Every row here is an integer format (.l/.w/.b), which still
+		 * goes through the int-to-double library stub even post-#4
+		 * (only .d/.x are fully native) -- cycles exclude stub time
+		 * either way (see bench/README.md), so the delta this probe
+		 * is actually measuring (ea.asm's own decode cost) stays
+		 * valid; flagged here so it's not mistaken for a fully-native
+		 * number.
+		 */
+		if (i <= 2) {
+			int ok = (got == expected) && (a0_after == a0_expected);
+			printf("%-20s %14ld %10s  got %.17g (want %.17g), a0 %08x (want %08x)%s\n",
+			       names[i], cycles, ok ? "MATCH" : "DIFFER", got, expected,
+			       a0_after, a0_expected, stub_hit ? " (stub)" : "");
+		} else {
+			printf("%-20s %14ld %10s  got %.17g (want %.17g)%s\n",
+			       names[i], cycles, (got == expected) ? "MATCH" : "DIFFER", got, expected,
+			       stub_hit ? " (stub)" : "");
+		}
+	}
+}
+
 int main(int argc, char **argv)
 {
 	const char *variant_paths[2] = { "build/femu020.bin", "build/femu020m.bin" };
@@ -861,6 +966,40 @@ int main(int argc, char **argv)
 		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
 
 		run_chain_probe(&img, probe_ops, probe_size);
+	}
+
+	/* EA-decode fast-path probe for checklist #8. Same library build as
+	 * the other probes -- ea.asm's fast path never touches a library
+	 * call itself (only the int-to-double conversion each row's own
+	 * .l/.w/.b format needs regardless of which EA path got there).
+	 * Opcodes aren't uniform 4-byte instructions (see
+	 * ea_fastpath_probe.asm), so loaded directly rather than via
+	 * load_slotted_opcodes -- run_ea_fastpath_probe places them itself.
+	 */
+	{
+		struct image img;
+		size_t fsize = 0;
+		unsigned char probe_ops[26];
+		size_t probe_size;
+		FILE *pf;
+
+		pf = fopen("build/ea_fastpath_probe.bin", "rb");
+		if (!pf) { fprintf(stderr, "bench: build/ea_fastpath_probe.bin missing -- run make first\n"); return 1; }
+		probe_size = fread(probe_ops, 1, sizeof probe_ops, pf);
+		fclose(pf);
+		if (probe_size != sizeof probe_ops) {
+			fprintf(stderr, "bench: build/ea_fastpath_probe.bin has the wrong size (%zu bytes, expected %zu)\n",
+			        probe_size, sizeof probe_ops);
+			return 1;
+		}
+
+		memset(mem, 0, MEM_SIZE);
+		load_binary(variant_paths[0], 0, &fsize);
+		parse_image_header(&img);
+		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
+		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
+
+		run_ea_fastpath_probe(&img, probe_ops);
 	}
 
 	return 0;
