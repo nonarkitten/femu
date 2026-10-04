@@ -95,7 +95,7 @@ result) in [Checklist details](#checklist-details) below.
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | ✅ Done (14/14 + `fsqrt` — see row) | `claude/keen-mendel-3hb6vs` |
-| [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
+| [11](#row-11) | Fix `fmovem` bulk register move | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 | [13](#row-13) | CORDIC (or a shorter minimax series) for `#10`'s native transcendentals, to cut the per-hop chaining cost `#10` measured | 10 | 🔲 Not started | `perf/13-cordic-transcendentals` |
 
@@ -1171,9 +1171,51 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   hardware `fmovem` "fixes problems" per the same note) — correctness fix
   that's also a hot path for context-heavy code.
 - **Depends on:** 0
-- **Status:** 🔲 Not started
-- **Branch:** `perf/11-fmovem-fix`
-- **Result:** —
+- **Status:** ✅ Done
+- **Branch:** `claude/keen-mendel-3hb6vs`
+- **Result:** The real 68881/68882 FMOVEM register-list order has a
+  well-known gotcha, confirmed here against an independent, already-
+  vendored reference implementation (`bench/vendor/musashi/
+  m68kfpu.c`'s `fmovem()`/`WRITE_EA_FPE()`/`READ_EA_FPE()`) rather than
+  assumed from memory: the list's bit-to-register mapping flips
+  between predecrement (`-(An)`: bit N = FPn directly) and
+  postincrement/control (every other addressing mode: bit N = FP(7-N),
+  reversed) — `GETFMOVEMREGS` in `src/ops/fmovem.asm` already tested
+  the right extension-word bit (12) and reversed the byte correctly
+  for this half. What was actually wrong was downstream: once
+  normalized to one canonical "bit N = FPn" convention, the real
+  memory layout is NOT "ascending address = ascending FPn" — tracing
+  Musashi's register-by-register loop shows the opposite, for *both*
+  addressing conventions alike: ascending address holds *descending*
+  FPn (the highest-numbered selected register lands closest to the
+  un-adjusted end of the address range, the lowest-numbered one
+  farthest from it). `FmovemEaRegHandler`/`FmovemRegEaHandler` called
+  their per-register move macros (`FMOVEMEAFPN`/`FMOVEMFPNEA`) in
+  ascending order (FP0 first) — backwards. Fixed by reversing the
+  literal call order (FP7 first, FP0 last); `GETFMOVEMREGS`'s own
+  bit-reversal logic needed no change.
+
+  The pre-existing `fmove_probe.asm` fmovem vectors encoded the exact
+  same wrong assumption the code had (both written from the same
+  original, unfixed understanding), so they "passed" without ever
+  catching this — and they only used plain `(a0)` addressing, which
+  never exercises `GETFMOVEMREGS`'s bit-12 reversal path at all (that
+  bit is only set by the assembler for predecrement vs. postincrement/
+  control, never for plain control-mode addressing). Fixed alongside
+  the code (`bench/src/harness.c`'s expected values for the two
+  existing vectors corrected to the real descending-FPn order), and
+  two new vectors added — `fmovem.x fp0-fp3,-(a0)` and `fmovem.x
+  (a0)+,fp0-fp3` — specifically because those are the ones that
+  actually exercise the bit-12 reversal path the old vectors never
+  touched, including a post-condition check that `a0` itself ends up
+  at the right address after the predecrement/postincrement.
+
+  **Measured** (`bench/`, all 4 `fmovem`-related vectors in the
+  `fmove`/`fmovem` probe): every case now reports `ok` against the
+  corrected expectations, including both new predecrement/
+  postincrement vectors and their `a0` post-conditions. Every other
+  vector and probe in the suite remains bit-exact (only the already-
+  explained `fcosh(9.43)` case persists).
 
 <a id="row-12"></a>
 #### #12 — Relaxed-precision internal format

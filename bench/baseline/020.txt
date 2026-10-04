@@ -261,14 +261,16 @@ fcosh                 730      MATCH  inf vs inf
 ftanh               37672      MATCH  -0.99990920426259511 vs -0.99990920426259511
 ftanh                 668      MATCH  0 vs 0
 
-=== fmove/fmovem memory-operand probe (checklist #4) ===
+=== fmove/fmovem memory-operand probe (checklist #4/#11) ===
 op                               cycles       ok  note
 fmove.x (a0),fp0                    719       ok  got 1.5, want 1.5
 fmove.x fp0,(a0)                    650       ok  got 1.5, want 1.5
 fmove.d (a0),fp0                    864       ok  got 1.5, want 1.5
 fmove.d fp0,(a0)                    791       ok  got 1.5, want 1.5
-fmovem.x (a0),fp0-fp3               975       ok  fp0-fp3 got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
-fmovem.x fp0-fp3,(a0)               975       ok  mem got 1.5,2.5,3.5,4.5 want 1.5,2.5,3.5,4.5
+fmovem.x (a0),fp0-fp3               975       ok  fp0-fp3 got 4.5,3.5,2.5,1.5 want 4.5,3.5,2.5,1.5
+fmovem.x fp0-fp3,(a0)               975       ok  mem got 4.5,3.5,2.5,1.5 want 4.5,3.5,2.5,1.5
+fmovem.x fp0-fp3,-(a0)              947       ok  mem got 4.5,3.5,2.5,1.5 want 4.5,3.5,2.5,1.5, a0 0005ffd0 (want 0005ffd0)
+fmovem.x (a0)+,fp0-fp3              986       ok  fp0-fp3 got 4.5,3.5,2.5,1.5 want 4.5,3.5,2.5,1.5, a0 00060030 (want 00060030)
 
 === fsmul/fsglmul/fsdiv/fsgldiv/FPCR-single probe (checklist #5) ===
 op                                     cycles      match  note

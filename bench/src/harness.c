@@ -476,21 +476,42 @@ static long run_one_opcode(const struct image *img, unsigned slot, int *done_out
  * is unchanged, only the internal register format moved). Opcodes come
  * from fmove_probe.asm, in this fixed order.
  */
+/* Checklist #11: real 68881/68882 FMOVEM register-list order is NOT
+ * "ascending address = ascending FPn" -- confirmed against Musashi's
+ * own m68kfpu.c (bench/vendor/musashi/m68kfpu.c), which walks the list
+ * register-by-register for both predecrement and postincrement/
+ * control addressing and shows the opposite: ascending address holds
+ * DESCENDING FPn (the highest-numbered selected register lands at the
+ * lowest/first address, the lowest-numbered at the highest/last one),
+ * for EITHER addressing-mode convention once GETFMOVEMREGS's existing
+ * bit-reversal has normalized the raw encoding. Cases 4/5 here used to
+ * assert the ascending-FPn (wrong) expectation -- not because they
+ * were testing something different, but because they were written
+ * from the same mistaken assumption src/ops/fmovem.asm's code had, so
+ * they "passed" without ever catching it. Fixed alongside that code
+ * fix, not independently. Cases 6/7 are new: plain "(a0)" never
+ * exercises GETFMOVEMREGS's bit-12 reversal path at all (that bit is
+ * only set by the assembler for predecrement vs. postincrement/
+ * control), so this probe had no vector that actually exercised the
+ * part of the bug that TOOK the reversal path before now.
+ */
 static void run_fmove_probe(const struct image *img)
 {
-	static const char *names[6] = {
+	static const char *names[8] = {
 		"fmove.x (a0),fp0", "fmove.x fp0,(a0)",
 		"fmove.d (a0),fp0", "fmove.d fp0,(a0)",
 		"fmovem.x (a0),fp0-fp3", "fmovem.x fp0-fp3,(a0)",
+		"fmovem.x fp0-fp3,-(a0)", "fmovem.x (a0)+,fp0-fp3",
 	};
 	int i, done;
 	long cycles;
 	double got;
+	unsigned a0_after;
 
-	printf("\n=== fmove/fmovem memory-operand probe (checklist #4) ===\n");
+	printf("\n=== fmove/fmovem memory-operand probe (checklist #4/#11) ===\n");
 	printf("%-24s %14s %8s  %s\n", "op", "cycles", "ok", "note");
 
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < 8; i++) {
 		switch (i) {
 		case 0: /* fmove.x (a0),fp0 */
 			mem_put_extended(EA_BUF, 1.5);
@@ -519,6 +540,24 @@ static void run_fmove_probe(const struct image *img)
 			mem_put_extended(img->reg_fpn + 36, 4.5);
 			memset(mem + EA_BUF, 0, 48);
 			break;
+		case 6: /* fmovem.x fp0-fp3,-(a0): a0 starts at EA_BUF, ends up
+			 * EA_BUF-48 (predecrement by the full list size) -- the
+			 * four registers land BELOW EA_BUF, at EA_BUF-48..EA_BUF-12.
+			 */
+			mem_put_extended(img->reg_fpn + 0, 1.5);
+			mem_put_extended(img->reg_fpn + 12, 2.5);
+			mem_put_extended(img->reg_fpn + 24, 3.5);
+			mem_put_extended(img->reg_fpn + 36, 4.5);
+			memset(mem + EA_BUF - 48, 0, 48);
+			break;
+		case 7: /* fmovem.x (a0)+,fp0-fp3: a0 starts at EA_BUF, ends up
+			 * EA_BUF+48; same source layout as case 4.
+			 */
+			mem_put_extended(EA_BUF + 0, 1.5);
+			mem_put_extended(EA_BUF + 12, 2.5);
+			mem_put_extended(EA_BUF + 24, 3.5);
+			mem_put_extended(EA_BUF + 36, 4.5);
+			break;
 		}
 
 		cycles = run_one_opcode(img, (unsigned)i, &done);
@@ -546,19 +585,45 @@ static void run_fmove_probe(const struct image *img)
 			       got == 1.5 ? "ok" : "WRONG", got);
 			break;
 		case 4: {
+			/* Ascending address = descending FPn: EA_BUF+0 (lowest,
+			 * value 1.5) lands in fp3, not fp0.
+			 */
 			double g0 = mem_get_extended(img->reg_fpn + 0), g1 = mem_get_extended(img->reg_fpn + 12),
 			       g2 = mem_get_extended(img->reg_fpn + 24), g3 = mem_get_extended(img->reg_fpn + 36);
-			int ok = (g0 == 1.5 && g1 == 2.5 && g2 == 3.5 && g3 == 4.5);
-			printf("%-24s %14ld %8s  fp0-fp3 got %.3g,%.3g,%.3g,%.3g want 1.5,2.5,3.5,4.5\n",
+			int ok = (g3 == 1.5 && g2 == 2.5 && g1 == 3.5 && g0 == 4.5);
+			printf("%-24s %14ld %8s  fp0-fp3 got %.3g,%.3g,%.3g,%.3g want 4.5,3.5,2.5,1.5\n",
 			       names[i], cycles, ok ? "ok" : "WRONG", g0, g1, g2, g3);
 			break;
 		}
 		case 5: {
+			/* Same reversal in the store direction: fp0 (1.5) lands at
+			 * the highest address, EA_BUF+36, not EA_BUF+0.
+			 */
 			double g0 = mem_get_extended(EA_BUF + 0), g1 = mem_get_extended(EA_BUF + 12),
 			       g2 = mem_get_extended(EA_BUF + 24), g3 = mem_get_extended(EA_BUF + 36);
-			int ok = (g0 == 1.5 && g1 == 2.5 && g2 == 3.5 && g3 == 4.5);
-			printf("%-24s %14ld %8s  mem got %.3g,%.3g,%.3g,%.3g want 1.5,2.5,3.5,4.5\n",
+			int ok = (g0 == 4.5 && g1 == 3.5 && g2 == 2.5 && g3 == 1.5);
+			printf("%-24s %14ld %8s  mem got %.3g,%.3g,%.3g,%.3g want 4.5,3.5,2.5,1.5\n",
 			       names[i], cycles, ok ? "ok" : "WRONG", g0, g1, g2, g3);
+			break;
+		}
+		case 6: {
+			double g0 = mem_get_extended(EA_BUF - 48), g1 = mem_get_extended(EA_BUF - 36),
+			       g2 = mem_get_extended(EA_BUF - 24), g3 = mem_get_extended(EA_BUF - 12);
+			a0_after = (unsigned)m68k_get_reg(NULL, M68K_REG_A0);
+			int ok = (g0 == 4.5 && g1 == 3.5 && g2 == 2.5 && g3 == 1.5) && a0_after == EA_BUF - 48;
+			printf("%-24s %14ld %8s  mem got %.3g,%.3g,%.3g,%.3g want 4.5,3.5,2.5,1.5, a0 %08x (want %08x)\n",
+			       names[i], cycles, ok ? "ok" : "WRONG", g0, g1, g2, g3,
+			       a0_after, (unsigned)(EA_BUF - 48));
+			break;
+		}
+		case 7: {
+			double g0 = mem_get_extended(img->reg_fpn + 0), g1 = mem_get_extended(img->reg_fpn + 12),
+			       g2 = mem_get_extended(img->reg_fpn + 24), g3 = mem_get_extended(img->reg_fpn + 36);
+			a0_after = (unsigned)m68k_get_reg(NULL, M68K_REG_A0);
+			int ok = (g3 == 1.5 && g2 == 2.5 && g1 == 3.5 && g0 == 4.5) && a0_after == EA_BUF + 48;
+			printf("%-24s %14ld %8s  fp0-fp3 got %.3g,%.3g,%.3g,%.3g want 4.5,3.5,2.5,1.5, a0 %08x (want %08x)\n",
+			       names[i], cycles, ok ? "ok" : "WRONG", g0, g1, g2, g3,
+			       a0_after, (unsigned)(EA_BUF + 48));
 			break;
 		}
 		}
@@ -950,7 +1015,7 @@ int main(int argc, char **argv)
 	 */
 	{
 		struct image img;
-		unsigned char probe_ops[6 * 4];
+		unsigned char probe_ops[8 * 4];
 		size_t fsize = 0, probe_size;
 		FILE *pf;
 
@@ -969,7 +1034,7 @@ int main(int argc, char **argv)
 		parse_image_header(&img);
 		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
 		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
-		load_slotted_opcodes(TEST_CODE, probe_ops, 6);
+		load_slotted_opcodes(TEST_CODE, probe_ops, 8);
 
 		run_fmove_probe(&img);
 	}
