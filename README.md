@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (11/14 + `fsqrt` done — see row) | `claude/keen-mendel-3hb6vs` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | ✅ Done (14/14 + `fsqrt` — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -706,13 +706,10 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   AmigaOS library dependency entirely, so this can in principle run
   on any 68k target (Mac, Atari), not just Amiga.
 - **Depends on:** 1, 4
-- **Status:** 🔲 In progress. Done: `fsqrt` (found along the way, not
-  one of the row's original 14), `fetox`, `flogn`, `ftwotox`,
+- **Status:** ✅ Done. All 14 originally named functions plus `fsqrt`
+  (found along the way) are now native: `fetox`, `flogn`, `ftwotox`,
   `ftentox`, `flog2`, `flog10`, `fsinh`, `fcosh`, `ftanh`, `fsin`,
-  `fcos`, `fsincos`, `ftan`, `fatan`. Left: `fasin`/`facos` — both
-  derive cheaply from `fatan` (`asin(x)=atan(x/sqrt(1-x^2))`,
-  `acos(x)=pi/2-asin(x)`), the last genuinely new algorithm in this
-  row having already landed with `fatan` itself.
+  `fcos`, `fsincos`, `ftan`, `fatan`, `fasin`, `facos`.
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -1117,10 +1114,54 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   and probe in the suite remains bit-exact (only the already-explained
   `fcosh(9.43)` case persists).
 
-  **Still to do in this row:** `fasin`/`facos`, both cheap derivations
-  from `fatan` + `fsqrt` (`asin(x)=atan(x/sqrt(1-x^2))`,
-  `acos(x)=pi/2-asin(x)`) — no new algorithm needed, same shape as
-  `ftan`/`fsincos` falling out of `fsin`/`fcos`.
+  **`fasin`/`facos` — done. This row is complete.** Both cheap
+  derivations, no new algorithm needed, same shape as `ftan`/`fsincos`
+  falling out of `fsin`/`fcos`: `NativeFasin`
+  (`src/utils/nativemath.asm`) computes `asin(x) = atan(x/sqrt(1-x^2))`
+  entirely from already-landed pieces (`NativeFsub`/`NativeFadd`/
+  `NativeFmul`/`NativeFsqrt`/`NativeFdiv`/`NativeFatan`); `facos.asm`
+  derives its own result from the same routine
+  (`acos(x) = pi/2-asin(x)`) rather than needing a `NativeFacos`
+  wrapper, the same "derive at the op-handler level" move `ftan.asm`
+  already made from `NativeFsincos`.
+
+  One real precision pitfall caught in Python before any assembly was
+  written: `1-x^2`, computed the obvious way (`x*x` then `1-`that),
+  loses precision catastrophically as `|x| -> 1` (subtracting two
+  nearly-equal quantities) — measured at ~4.7e-15 worst-case absolute
+  error (double precision, 200000 random samples) against the naive
+  form, versus ~2.2e-16 (about 1 ULP) once factored as `(1-x)*(1+x)`
+  instead — algebraically identical, but neither sub-expression is a
+  near-cancellation, so `NativeFasin` uses that form. A real, measured
+  difference this row's own "verify, don't guess" rule exists to catch
+  before it ships, not a hypothetical one.
+
+  `asin` is odd, so zero (either sign) is self-identical (`asin(0)=0`)
+  — but `acos` is neither odd nor even, so `facos.asm` has no such
+  shortcut and instead special-cases every boundary directly: `0 ->
+  pi/2`, `+1 -> 0`, `-1 -> pi` (an exact exponent-bumped double of
+  `pi/2`, same bit trick used throughout this row, not a second
+  independently-rounded constant — verified in Python). Both ops
+  special-case `|x|==1` themselves rather than ever handing it to
+  `NativeFasin` — that would divide by a `sqrt` of exactly zero — and
+  both treat `|x|>1` (finite) and `+-Inf` alike as out-of-domain,
+  constructing a NaN; an actual NaN passes through unchanged. The
+  `|x|` vs `1.0` test is the same plain 3-word unsigned lexicographic
+  compare `NativeFatan`'s own range-reduction already relies on.
+
+  **Measured** (`bench/`, register-direct, 7 new vectors each for
+  `fasin`/`facos`: a negative-operand case alongside each existing
+  positive one, zero, `+1`, `-1`, an out-of-domain `1.5`, and
+  `+Inf`/`-Inf`): every case `MATCH`es the host `asin()`/`acos()`
+  bit-exactly, including the out-of-domain and infinity NaN cases and
+  both pre-existing vectors. Every other vector and probe in the suite
+  remains bit-exact (only the already-explained `fcosh(9.43)` case
+  persists).
+
+  **This closes out checklist `#10`.** All 14 originally named
+  functions, plus `fsqrt` found along the way, now run without
+  `mathieeedoubtrans.library`/`mathieeedoubbas.library` — femu's
+  transcendentals no longer need AmigaOS at all.
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move
