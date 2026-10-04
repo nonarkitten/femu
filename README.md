@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt`, `fetox`, `flogn` done) | `claude/keen-mendel-3hb6vs` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt`, `fetox`, `flogn`, `ftwotox`, `ftentox`, `flog2`, `flog10` done) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -706,7 +706,7 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   AmigaOS library dependency entirely, so this can in principle run
   on any 68k target (Mac, Atari), not just Amiga.
 - **Depends on:** 1, 4
-- **Status:** 🔲 In progress (`fsqrt`, `fetox`, `flogn` done)
+- **Status:** 🔲 In progress (`fsqrt`, `fetox`, `flogn`, `ftwotox`, `ftentox`, `flog2`, `flog10` done)
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -882,16 +882,58 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   cost instead of a `(stub)` approximation. Slower than the old library
   call, as expected and explicitly not the point of this row. All
   existing vectors and probes remain bit-exact elsewhere (only the
-  pre-existing, unrelated `flog2` 1-ULP discrepancy persists).
+  pre-existing, unrelated `flog2` 1-ULP discrepancy persists -- fixed
+  for real two rows down, see below).
 
-  **Still to do in this row:** now that `fetox`/`flogn` are both
-  native, `ftwotox`/`ftentox`'s general case (`x^y = e^(y*ln(x))`) and
-  `flog2`/`flog10` (`log2(x) = ln(x)/ln(2)`, `log10(x) = ln(x)/ln(10)`)
-  are cheap derivations rather than needing their own algorithms, and
-  `fsinh`/`fcosh`/`ftanh` derive from `fetox` the same way. `fsin`/
+  **`ftwotox`/`ftentox`'s general case, `flog2`/`flog10` — done.**
+  With `fetox`/`flogn` both native, these four were cheap derivations
+  rather than needing their own algorithm: `ftwotox`'s general case
+  (the `#9` integer-exponent fast path stays for its own cases, but
+  doesn't catch `x=0` -- that now falls through to the general path
+  below, which still gives the right answer since `e^(0*ln(2))=e^0=1`)
+  and `ftentox` (no integer fast path at all, unlike `ftwotox` --
+  `#9`'s row already scoped that out, "bump the exponent" being a
+  base-2-only trick) both compute `b^x = e^(x*ln(b))`: multiply by the
+  shared `ExpLn2`/new `ExpLn10` constant (`src/utils/nativemath.asm`)
+  then `jsr NativeFexp`. `flog2`/`flog10` compute `log_b(x) =
+  ln(x)/ln(b)`: `jsr NativeFlogn` then multiply by the shared
+  `ExpInvLn2`/new `ExpInvLn10` constant. Each op's Inf/NaN (and, for
+  the two logs, zero/negative) special cases are discriminated directly
+  on the input, duplicated per op rather than shared (matching this
+  codebase's existing per-op-ladder style, e.g. `FE_FMUL_SINGLE`'s own
+  header comment) -- `ftwotox`/`ftentox`: `+Inf`→`+Inf`, `-Inf`→`+0`,
+  NaN passthrough; `flog2`/`flog10`: zero→`-Inf`, `+Inf`→`+Inf`, `-Inf`
+  and any finite negative→NaN, NaN passthrough (identical to `flogn`'s
+  own ladder, since they share its domain).
+
+  A genuine, unplanned bonus: `flog2`'s long-standing 1-ULP discrepancy
+  against the host reference (present since `#9`'s PR, caused by the
+  old `log10(x)/log10(2)` library-stub composition rounding differently
+  than glibc's direct `log2()`) is simply **gone** now that `flog2`
+  computes `ln(x)*(1/ln(2))` instead — not something this row set out
+  to fix, just a side effect of the composition changing.
+
+  **Measured** (`bench/`, register-direct, 17 new vectors across the
+  four ops: `x=0` for both exponentials, a negative and a large
+  non-integer exponent for `ftwotox`, a negative exponent for
+  `ftentox`, `+Inf`/`-Inf` for all four, and `0`/negative for both
+  logs): every case `MATCH`es the host `pow()`/`log2()`/`log10()`
+  bit-exactly, NaN cases included. All four ops' pre-existing vectors
+  also now show real measured costs instead of `(stub)` approximations.
+  Slower than the old library calls, as expected and explicitly not the
+  point of this row. Every other vector and probe remains bit-exact,
+  including — for the first time since `#9` — `flog2`'s own prior
+  vector, with no `flog2`/`flog10`/`ftwotox`/`ftentox` discrepancy left
+  anywhere in the suite.
+
+  **Still to do in this row:** `fsinh`/`fcosh`/`ftanh` are the same
+  kind of cheap derivation from `fetox` (`sinh(x)=(e^x-e^-x)/2`,
+  `cosh(x)=(e^x+e^-x)/2`, `tanh(x)=sinh(x)/cosh(x)` or the numerically
+  steadier `1-2/(e^(2x)+1)` form) and are fair game any time. `fsin`/
   `fcos` (foundational for `ftan`/`fsincos`) and `fatan` (foundational
   for `fasin`/`facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that
-  `fsqrt` is native too) still need their own algorithms.
+  `fsqrt` is native too) are the two rows left that need a real new
+  algorithm rather than a derivation.
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move

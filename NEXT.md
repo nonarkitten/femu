@@ -260,14 +260,25 @@ is *always* false for a correct NaN result (IEEE: `NaN != NaN`) — fixed
 with a `values_match()` helper used at all 5 comparison sites in
 `bench/src/harness.c`, not just this row's new vectors.
 
-Next up in this row: now that `fetox`/`flogn` are both native,
-`ftwotox`/`ftentox`'s general case and `flog2`/`flog10` are cheap
-derivations (`x^y = e^(y*ln(x))`, `log_b(x) = ln(x)/ln(b)`) rather than
-needing their own algorithms, and `fsinh`/`fcosh`/`ftanh` derive from
-`fetox` directly — worth picking off before the two rows that still need
-real new algorithms: `fsin`/`fcos` (foundational for `ftan`/`fsincos`),
-then `fatan` (foundational for `fasin`/`facos` via
-`asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too). `#11`
+`ftwotox`/`ftentox`'s general case and `flog2`/`flog10` are also done
+now (see `README.md`'s `#10` row for the full writeup) — cheap
+derivations once `fetox`/`flogn` were native, no new algorithm needed:
+`b^x = e^(x*ln(b))` (multiply by `ExpLn2`/new `ExpLn10`, then
+`NativeFexp`) and `log_b(x) = ln(x)/ln(b)` (`NativeFlogn`, then
+multiply by `ExpInvLn2`/new `ExpInvLn10`). Each got its own Inf/NaN
+(and, for the logs, zero/negative) special-case ladder, duplicated per
+op rather than shared. Unplanned bonus: `flog2`'s long-standing 1-ULP
+discrepancy against the host reference (there since `#9`, from the old
+`log10(x)/log10(2)` library-stub composition rounding differently than
+glibc's direct `log2()`) is simply gone now that `flog2` computes
+`ln(x)*(1/ln(2))` instead — the whole bench suite is bit-exact with no
+discrepancies left anywhere, for the first time this session.
+
+Next up in this row: `fsinh`/`fcosh`/`ftanh` are the same kind of cheap
+derivation from `fetox` and are fair game any time. `fsin`/`fcos`
+(foundational for `ftan`/`fsincos`) and `fatan` (foundational for
+`fasin`/`facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is
+native too) are the two rows left that need a real new algorithm. `#11`
 (fmovem bulk register move fix) remains untouched and fair game any time.
 
 **Before assuming something's a bug: check for concurrent work.** More
