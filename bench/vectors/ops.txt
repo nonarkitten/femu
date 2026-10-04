@@ -69,3 +69,11 @@ fmul     5.5      1.0
 fdiv     5.5      1.0
 fmul     -3.5     4.0
 fdiv     100.0    0.5
+fsqrt    2.0      -
+fsqrt    0.5      -
+fsqrt    100.0    -
+fsqrt    3.0      -
+fsqrt    0.0001   -
+fsqrt    123456789.123    -
+fsqrt    1.5e-10  -
+fsqrt    1.5e10   -

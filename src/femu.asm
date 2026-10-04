@@ -59,6 +59,7 @@
 	include		"ops/fmovecr.asm"
 	include		"ops/fmovem.asm"
 	include		"ops/fmul.asm"
+	include		"utils/nativemath.asm"
 	include		"ops/fneg.asm"
 	include		"ops/frestore.asm"
 	include		"ops/fsave.asm"
