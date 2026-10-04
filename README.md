@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt`, `fetox` done) | `claude/keen-mendel-3hb6vs` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (`fsqrt`, `fetox`, `flogn` done) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -706,7 +706,7 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   AmigaOS library dependency entirely, so this can in principle run
   on any 68k target (Mac, Atari), not just Amiga.
 - **Depends on:** 1, 4
-- **Status:** 🔲 In progress (`fsqrt`, `fetox` done)
+- **Status:** 🔲 In progress (`fsqrt`, `fetox`, `flogn` done)
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -837,12 +837,61 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   existing vectors and probes remain bit-exact elsewhere (only the
   pre-existing, unrelated `flog2` 1-ULP discrepancy persists).
 
-  **Still to do in this row:** `flogn` (foundational — once native,
-  `ftwotox`/`ftentox`'s general case, `flog2`/`flog10`, and
-  `fsinh`/`fcosh`/`ftanh` all become cheap derivations rather than
-  needing their own algorithms), `fsin`/`fcos` (foundational for `ftan`/
-  `fsincos`), and `fatan` (foundational for `fasin`/`facos` via
-  `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too).
+  **`flogn` — done.** The `#9` fast path for `+1.0` stays; everything
+  else goes through `NativeFlogn` (`src/utils/nativemath.asm`): read
+  `x = m * 2^e` directly off the operand's own exponent/mantissa split
+  (`m` in `[1,2)`, free — no bit-shifting needed, same as the rest of
+  this row), then `ln(x) = ln(m) + e*ln(2)` (`e*ln(2)` reuses
+  `NativeFexp`'s own `ExpLn2` constant rather than a second copy).
+  `ln(m)` itself uses the atanh series `s = (m-1)/(m+1)`,
+  `ln(m) = 2*atanh(s) = 2*s*(1 + s^2/3 + s^4/5 + ...)` — but `m` alone
+  gives `s` up to `1/3`, needing an impractically long series (~20
+  terms for `2^-63`, verified in Python), so `m` is first centered
+  against `sqrt(2)`: if `m >= sqrt(2)`, `m := m/sqrt(2)` and `ln(2)/2`
+  is added back once `ln(m/sqrt(2))` is known; otherwise `m` is already
+  in `[1,sqrt(2))` and the correction is `0`. This halves `s`'s worst
+  case to `(sqrt(2)-1)/(sqrt(2)+1) ~= 0.1716`, and since `m` and
+  `sqrt(2)` share the same exponent (`16383`) by construction, "`m >=
+  sqrt(2)`" is just an unsigned 64-bit mantissa compare — no general
+  float comparison needed. 13 terms were verified in Python (exact
+  `Decimal` arithmetic, 300000+ random samples plus the `m=1`/`m->
+  sqrt(2)` boundary cases) to bring the series' own truncation error to
+  ~0.0015 ULP, the same comfortable margin `fetox`'s 16-term series
+  uses. Special cases: `0` (either sign) → `-Inf` (a pole error, same
+  as every host libm checked against); `+Inf` passes through unchanged;
+  `-Inf` and any finite negative `x` construct a NaN (`ln` of a
+  negative isn't real); an actual NaN passes through unchanged — all
+  discriminated the same way `SETCC`/`fsqrt`/`fetox` already do.
+
+  Landing `flogn`'s NaN-producing special cases surfaced a real bench
+  harness gap: every `MATCH`/`DIFFER` check in `bench/src/harness.c`
+  used a bare `==`, which is *always* false for a NaN result (IEEE:
+  `NaN != NaN`, even itself) — so a correct NaN answer would have
+  printed `DIFFER` regardless. Fixed with a `values_match()` helper
+  (`isnan(want) ? isnan(got) : got == want`) used at all 5 comparison
+  sites in the file, not just this row's new vectors — the same bug
+  would have hit any future op's NaN-producing test the same way.
+
+  **Measured** (`bench/`, register-direct, 9 new vectors: `0.5`/
+  `0.0001` exercising a negative `e`, `1.3` exercising no sqrt(2)
+  centering, `1.5` exercising it, `1000000.0` exercising a larger
+  positive `e`, `0.0`/`-5.0`/`+Inf`/`-Inf` exercising every special
+  case): every case `MATCH`es the host `log()` bit-exactly (NaN cases
+  included, thanks to the harness fix above), including the
+  pre-existing `flogn(7.25)` vector, which now shows a real measured
+  cost instead of a `(stub)` approximation. Slower than the old library
+  call, as expected and explicitly not the point of this row. All
+  existing vectors and probes remain bit-exact elsewhere (only the
+  pre-existing, unrelated `flog2` 1-ULP discrepancy persists).
+
+  **Still to do in this row:** now that `fetox`/`flogn` are both
+  native, `ftwotox`/`ftentox`'s general case (`x^y = e^(y*ln(x))`) and
+  `flog2`/`flog10` (`log2(x) = ln(x)/ln(2)`, `log10(x) = ln(x)/ln(10)`)
+  are cheap derivations rather than needing their own algorithms, and
+  `fsinh`/`fcosh`/`ftanh` derive from `fetox` the same way. `fsin`/
+  `fcos` (foundational for `ftan`/`fsincos`) and `fatan` (foundational
+  for `fasin`/`facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that
+  `fsqrt` is native too) still need their own algorithms.
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move

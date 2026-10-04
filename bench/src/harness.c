@@ -161,6 +161,17 @@ static void mem_put_extended(unsigned addr, double v)
 	wr_long(addr + 4, (unsigned)(mant >> 32));
 	wr_long(addr + 8, (unsigned)mant);
 }
+/* Plain == always fails for a NaN result (IEEE: NaN != NaN, even
+ * itself), so any probe/vector whose correct answer is NaN would
+ * print DIFFER even when femu's NaN is exactly right. Every match
+ * check in this file should go through this instead of a bare ==.
+ */
+static int values_match(double got, double want)
+{
+	if (isnan(want)) return isnan(got);
+	return got == want;
+}
+
 static double mem_get_extended(unsigned addr)
 {
 	unsigned word0 = rd_long(addr), mhi = rd_long(addr + 4), mlo = rd_long(addr + 8);
@@ -608,7 +619,7 @@ static void run_fsmul_probe(const struct image *img)
 
 		got = mem_get_extended(img->reg_fpn + 0);
 		printf("%-30s %14ld %10s  %.17g vs %.17g\n", names[i], cycles,
-		       (got == expected) ? "MATCH" : "DIFFER", got, expected);
+		       values_match(got, expected) ? "MATCH" : "DIFFER", got, expected);
 	}
 }
 
@@ -690,7 +701,7 @@ static void run_chain_probe(const struct image *img, const unsigned char *probe_
 		default: expected = a + b; break;          /* fadd, nop -- nop never runs */
 		}
 		printf("%-30s %14ld %10s  %.17g vs %.17g\n", rows[i].name, total_cycles,
-		       (got == expected) ? "MATCH" : "DIFFER", got, expected);
+		       values_match(got, expected) ? "MATCH" : "DIFFER", got, expected);
 	}
 }
 
@@ -777,13 +788,13 @@ static void run_ea_fastpath_probe(const struct image *img, const unsigned char *
 		 * number.
 		 */
 		if (i <= 2) {
-			int ok = (got == expected) && (a0_after == a0_expected);
+			int ok = values_match(got, expected) && (a0_after == a0_expected);
 			printf("%-20s %14ld %10s  got %.17g (want %.17g), a0 %08x (want %08x)%s\n",
 			       names[i], cycles, ok ? "MATCH" : "DIFFER", got, expected,
 			       a0_after, a0_expected, stub_hit ? " (stub)" : "");
 		} else {
 			printf("%-20s %14ld %10s  got %.17g (want %.17g)%s\n",
-			       names[i], cycles, (got == expected) ? "MATCH" : "DIFFER", got, expected,
+			       names[i], cycles, values_match(got, expected) ? "MATCH" : "DIFFER", got, expected,
 			       stub_hit ? " (stub)" : "");
 		}
 	}
@@ -887,7 +898,7 @@ int main(int argc, char **argv)
 
 			printf("%-10s %14ld %10s  %.17g vs %.17g%s\n",
 			       vecs[vi].op, total_cycles,
-			       (actual == expected) ? "MATCH" : "DIFFER",
+			       values_match(actual, expected) ? "MATCH" : "DIFFER",
 			       actual, expected,
 			       stub_hit ? " (stub)" : "");
 		}

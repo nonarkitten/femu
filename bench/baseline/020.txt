@@ -39,7 +39,7 @@ ftentox               966      MATCH  131825.67385564075 vs 131825.67385564075 (
 ftwotox              1030      MATCH  5792.6187514801977 vs 5792.6187514801977 (stub)
 flog2                 982     DIFFER  2.8579809951275719 vs 2.8579809951275723 (stub)
 flog10                954      MATCH  0.86033800657099369 vs 0.86033800657099369 (stub)
-flogn                 966      MATCH  1.9810014688665833 vs 1.9810014688665833 (stub)
+flogn               19488      MATCH  1.9810014688665833 vs 1.9810014688665833
 fsin                  954      MATCH  0.24740395925452294 vs 0.24740395925452294 (stub)
 fsinh                 954      MATCH  2770.6931066087172 vs 2770.6931066087172 (stub)
 ftan                  954      MATCH  0.96658293352388214 vs 0.96658293352388214 (stub)
@@ -71,6 +71,15 @@ fetox                 732      MATCH  0 vs 0
 fsub                 1043      MATCH  -3 vs -3
 fsub                 1043      MATCH  3 vs 3
 fadd                  975      MATCH  7 vs 7
+flogn                7309      MATCH  -0.69314718055994529 vs -0.69314718055994529
+flogn               19175      MATCH  0.26236426446749106 vs 0.26236426446749106
+flogn               19458      MATCH  0.40546510810816438 vs 0.40546510810816438
+flogn               20135      MATCH  13.815510557964274 vs 13.815510557964274
+flogn               20217      MATCH  -9.2103403719761818 vs -9.2103403719761818
+flogn                 718      MATCH  -inf vs -inf
+flogn                 722      MATCH  nan vs -nan
+flogn                 736      MATCH  inf vs inf
+flogn                 742      MATCH  nan vs -nan
 
 === femu.020m (NOMATHLIB) ===
 op                 cycles      match  note
@@ -112,7 +121,7 @@ ftentox               966      MATCH  131825.67385564075 vs 131825.67385564075 (
 ftwotox              1030      MATCH  5792.6187514801977 vs 5792.6187514801977 (stub)
 flog2                 982     DIFFER  2.8579809951275719 vs 2.8579809951275723 (stub)
 flog10                954      MATCH  0.86033800657099369 vs 0.86033800657099369 (stub)
-flogn                 966      MATCH  1.9810014688665833 vs 1.9810014688665833 (stub)
+flogn               19488      MATCH  1.9810014688665833 vs 1.9810014688665833
 fsin                  954      MATCH  0.24740395925452294 vs 0.24740395925452294 (stub)
 fsinh                 954      MATCH  2770.6931066087172 vs 2770.6931066087172 (stub)
 ftan                  954      MATCH  0.96658293352388214 vs 0.96658293352388214 (stub)
@@ -144,6 +153,15 @@ fetox                 732      MATCH  0 vs 0
 fsub                 1043      MATCH  -3 vs -3
 fsub                 1043      MATCH  3 vs 3
 fadd                  975      MATCH  7 vs 7
+flogn                7309      MATCH  -0.69314718055994529 vs -0.69314718055994529
+flogn               19175      MATCH  0.26236426446749106 vs 0.26236426446749106
+flogn               19458      MATCH  0.40546510810816438 vs 0.40546510810816438
+flogn               20135      MATCH  13.815510557964274 vs 13.815510557964274
+flogn               20217      MATCH  -9.2103403719761818 vs -9.2103403719761818
+flogn                 718      MATCH  -inf vs -inf
+flogn                 722      MATCH  nan vs -nan
+flogn                 736      MATCH  inf vs inf
+flogn                 742      MATCH  nan vs -nan
 
 === fmove/fmovem memory-operand probe (checklist #4) ===
 op                               cycles       ok  note
