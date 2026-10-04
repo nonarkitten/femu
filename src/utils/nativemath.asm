@@ -494,6 +494,11 @@ NativeFexp
 
 ExpInvLn2	dc.l	$3fff0000,$b8aa3b29,$5c17f0bc	; 1/ln(2)
 ExpLn2		dc.l	$3ffe0000,$b17217f7,$d1cf79ac	; ln(2)
+; ln(10)/1-over-ln(10): shared by ftentox's general case (10^x =
+; e^(x*ln(10))) and flog10's (log10(x) = ln(x)/ln(10)) -- checklist
+; #10, not just #9's integer-exponent ftwotox fast path.
+ExpLn10		dc.l	$40000000,$935d8ddd,$aaa8ac17	; ln(10)
+ExpInvLn10	dc.l	$3ffd0000,$de5bd8a9,$37287195	; 1/ln(10)
 ExpX		dc.l	0,0,0
 ExpK		dc.l	0
 ExpR		dc.l	0,0,0

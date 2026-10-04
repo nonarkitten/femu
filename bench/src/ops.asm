@@ -93,3 +93,20 @@
 	flogn.x		fp0,fp0
 	flogn.x		fp0,fp0
 	flogn.x		fp0,fp0
+	ftwotox.x	fp0,fp0
+	ftwotox.x	fp0,fp0
+	ftwotox.x	fp0,fp0
+	ftwotox.x	fp0,fp0
+	ftwotox.x	fp0,fp0
+	ftentox.x	fp0,fp0
+	ftentox.x	fp0,fp0
+	ftentox.x	fp0,fp0
+	ftentox.x	fp0,fp0
+	flog2.x		fp0,fp0
+	flog2.x		fp0,fp0
+	flog2.x		fp0,fp0
+	flog2.x		fp0,fp0
+	flog10.x	fp0,fp0
+	flog10.x	fp0,fp0
+	flog10.x	fp0,fp0
+	flog10.x	fp0,fp0

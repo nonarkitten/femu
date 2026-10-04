@@ -63,16 +63,38 @@ FtwotoxHandler
 	bra.w			.FastDone
 	.Slow:
 
-	jsr				InternalToDouble
-	move.l			d0,d2
-	move.l			d1,d3
-	move.l			#$40000000,d0
-	move.l			#$00000000,d1
-
-	; Emulate instruction
-	movea.l			MathIeeeDoubTransBase,a6
-	jsr				_LVOIEEEDPPow(a6)
-	jsr				DoubleToInternal
+	; Native general case (checklist #10): 2^x = e^(x*ln(2)) -- no
+	; library call. Inf/NaN discriminated directly on x itself, same
+	; style as fetox.asm's own ladder: +Inf -> +Inf (self-identical);
+	; -Inf -> +0 (2^-Inf underflows to 0); NaN passes through unchanged
+	; (mantissa isn't the clean explicit-bit-only Infinity pattern).
+	; Finite x (this also covers x=0, which the integer fast path above
+	; doesn't catch -- its exponent-field-zero encoding makes "bmi"
+	; take the slow path -- but e^(0*ln2)=e^0=1 falls out correctly
+	; here anyway) multiplies by ln(2) (NativeFexp's own ExpLn2
+	; constant, not a second copy) then goes through NativeFexp.
+	bfextu			d0{1:15},d6
+	cmp.l			#32767,d6
+	bne.s			.Finite2
+	cmp.l			#$80000000,d1
+	bne.s			.NotInf2
+	tst.l			d2
+	bne.s			.NotInf2
+	btst			#31,d0
+	beq.w			.FastDone
+	moveq			#0,d0
+	moveq			#0,d1
+	moveq			#0,d2
+	.NotInf2:
+	bra.w			.FastDone
+	.Finite2:
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	lea.l			ExpLn2,a0
+	movem.l			(a0),d0/d1/d2
+	jsr				NativeFmul
+	jsr				NativeFexp
 	.FastDone:
 
 	; Write results
