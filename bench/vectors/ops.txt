@@ -112,3 +112,15 @@ flog10   0.0      -
 flog10   -3.0     -
 flog10   inf      -
 flog10   -inf     -
+fsinh    -5.0     -
+fsinh    0.0      -
+fsinh    inf      -
+fsinh    -inf     -
+fcosh    -5.0     -
+fcosh    0.0      -
+fcosh    inf      -
+fcosh    -inf     -
+ftanh    -5.0     -
+ftanh    0.0      -
+ftanh    inf      -
+ftanh    -inf     -
