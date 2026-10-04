@@ -1,8 +1,8 @@
 
 === femu.020 (library) ===
 op                 cycles      match  note
-fadd                  983      MATCH  3.3000000000000003 vs 3.3000000000000003
-fsub                  975      MATCH  69.899999999999991 vs 69.899999999999991
+fadd                  975      MATCH  3.3000000000000003 vs 3.3000000000000003
+fsub                  967      MATCH  69.899999999999991 vs 69.899999999999991
 fmul                 1212      MATCH  27.224999999999998 vs 27.224999999999998
 fmul                  862      MATCH  -7 vs -7
 fmul                 1177      MATCH  3.6099999999999999 vs 3.6099999999999999
@@ -28,13 +28,13 @@ fabs                  648      MATCH  5.5 vs 5.5
 fneg                  656      MATCH  -12.1 vs -12.1
 fint                  971      MATCH  3 vs 3 (stub)
 fintrz                968      MATCH  2 vs 2 (stub)
-fsqrt               15385      MATCH  2.0615528128088303 vs 2.0615528128088303
+fsqrt               15379      MATCH  2.0615528128088303 vs 2.0615528128088303
 facos                 954      MATCH  0.76699400786186667 vs 0.76699400786186667 (stub)
 fasin                 954      MATCH  0.78949820934617188 vs 0.78949820934617188 (stub)
 fatan                 954      MATCH  1.1525719972156676 vs 1.1525719972156676 (stub)
 fcos                  954      MATCH  0.7316888688738209 vs 0.7316888688738209 (stub)
 fcosh                 954      MATCH  6228.2634059438069 vs 6228.2634059438069 (stub)
-fetox                 968      MATCH  38.861342871332468 vs 38.861342871332468 (stub)
+fetox               15846      MATCH  38.861342871332468 vs 38.861342871332468
 ftentox               966      MATCH  131825.67385564075 vs 131825.67385564075 (stub)
 ftwotox              1030      MATCH  5792.6187514801977 vs 5792.6187514801977 (stub)
 flog2                 982     DIFFER  2.8579809951275719 vs 2.8579809951275723 (stub)
@@ -54,19 +54,28 @@ fmul                  836      MATCH  5.5 vs 5.5
 fdiv                  836      MATCH  5.5 vs 5.5
 fmul                  862      MATCH  -14 vs -14
 fdiv                  862      MATCH  200 vs 200
-fsqrt               14602      MATCH  1.4142135623730951 vs 1.4142135623730951
-fsqrt               14602      MATCH  0.70710678118654757 vs 0.70710678118654757
-fsqrt               14571      MATCH  10 vs 10
-fsqrt               14652      MATCH  1.7320508075688772 vs 1.7320508075688772
-fsqrt               15361      MATCH  0.01 vs 0.01
-fsqrt               14092      MATCH  11111.111066090556 vs 11111.111066090556
-fsqrt               14652      MATCH  1.2247448713915891e-05 vs 1.2247448713915891e-05
-fsqrt               14769      MATCH  122474.48713915891 vs 122474.48713915891
+fsqrt               14596      MATCH  1.4142135623730951 vs 1.4142135623730951
+fsqrt               14596      MATCH  0.70710678118654757 vs 0.70710678118654757
+fsqrt               14565      MATCH  10 vs 10
+fsqrt               14646      MATCH  1.7320508075688772 vs 1.7320508075688772
+fsqrt               15355      MATCH  0.01 vs 0.01
+fsqrt               14086      MATCH  11111.111066090556 vs 11111.111066090556
+fsqrt               14646      MATCH  1.2247448713915891e-05 vs 1.2247448713915891e-05
+fsqrt               14763      MATCH  122474.48713915891 vs 122474.48713915891
+fetox               16090      MATCH  0.02573251272635994 vs 0.02573251272635994
+fetox               15863      MATCH  3269017.3724721107 vs 3269017.3724721107
+fetox               15621      MATCH  3.0590232050182579e-07 vs 3.0590232050182579e-07
+fetox               15781      MATCH  1.0005001250208359 vs 1.0005001250208359
+fetox                 732      MATCH  inf vs inf
+fetox                 732      MATCH  0 vs 0
+fsub                 1043      MATCH  -3 vs -3
+fsub                 1043      MATCH  3 vs 3
+fadd                  975      MATCH  7 vs 7
 
 === femu.020m (NOMATHLIB) ===
 op                 cycles      match  note
-fadd                  983      MATCH  3.3000000000000003 vs 3.3000000000000003
-fsub                  975      MATCH  69.899999999999991 vs 69.899999999999991
+fadd                  975      MATCH  3.3000000000000003 vs 3.3000000000000003
+fsub                  967      MATCH  69.899999999999991 vs 69.899999999999991
 fmul                 1212      MATCH  27.224999999999998 vs 27.224999999999998
 fmul                  862      MATCH  -7 vs -7
 fmul                 1177      MATCH  3.6099999999999999 vs 3.6099999999999999
@@ -92,13 +101,13 @@ fabs                  648      MATCH  5.5 vs 5.5
 fneg                  656      MATCH  -12.1 vs -12.1
 fint                 1188      MATCH  3 vs 3
 fintrz               1030      MATCH  2 vs 2
-fsqrt               15385      MATCH  2.0615528128088303 vs 2.0615528128088303
+fsqrt               15379      MATCH  2.0615528128088303 vs 2.0615528128088303
 facos                 954      MATCH  0.76699400786186667 vs 0.76699400786186667 (stub)
 fasin                 954      MATCH  0.78949820934617188 vs 0.78949820934617188 (stub)
 fatan                 954      MATCH  1.1525719972156676 vs 1.1525719972156676 (stub)
 fcos                  954      MATCH  0.7316888688738209 vs 0.7316888688738209 (stub)
 fcosh                 954      MATCH  6228.2634059438069 vs 6228.2634059438069 (stub)
-fetox                 968      MATCH  38.861342871332468 vs 38.861342871332468 (stub)
+fetox               15846      MATCH  38.861342871332468 vs 38.861342871332468
 ftentox               966      MATCH  131825.67385564075 vs 131825.67385564075 (stub)
 ftwotox              1030      MATCH  5792.6187514801977 vs 5792.6187514801977 (stub)
 flog2                 982     DIFFER  2.8579809951275719 vs 2.8579809951275723 (stub)
@@ -118,14 +127,23 @@ fmul                  836      MATCH  5.5 vs 5.5
 fdiv                  836      MATCH  5.5 vs 5.5
 fmul                  862      MATCH  -14 vs -14
 fdiv                  862      MATCH  200 vs 200
-fsqrt               14602      MATCH  1.4142135623730951 vs 1.4142135623730951
-fsqrt               14602      MATCH  0.70710678118654757 vs 0.70710678118654757
-fsqrt               14571      MATCH  10 vs 10
-fsqrt               14652      MATCH  1.7320508075688772 vs 1.7320508075688772
-fsqrt               15361      MATCH  0.01 vs 0.01
-fsqrt               14092      MATCH  11111.111066090556 vs 11111.111066090556
-fsqrt               14652      MATCH  1.2247448713915891e-05 vs 1.2247448713915891e-05
-fsqrt               14769      MATCH  122474.48713915891 vs 122474.48713915891
+fsqrt               14596      MATCH  1.4142135623730951 vs 1.4142135623730951
+fsqrt               14596      MATCH  0.70710678118654757 vs 0.70710678118654757
+fsqrt               14565      MATCH  10 vs 10
+fsqrt               14646      MATCH  1.7320508075688772 vs 1.7320508075688772
+fsqrt               15355      MATCH  0.01 vs 0.01
+fsqrt               14086      MATCH  11111.111066090556 vs 11111.111066090556
+fsqrt               14646      MATCH  1.2247448713915891e-05 vs 1.2247448713915891e-05
+fsqrt               14763      MATCH  122474.48713915891 vs 122474.48713915891
+fetox               16090      MATCH  0.02573251272635994 vs 0.02573251272635994
+fetox               15863      MATCH  3269017.3724721107 vs 3269017.3724721107
+fetox               15621      MATCH  3.0590232050182579e-07 vs 3.0590232050182579e-07
+fetox               15781      MATCH  1.0005001250208359 vs 1.0005001250208359
+fetox                 732      MATCH  inf vs inf
+fetox                 732      MATCH  0 vs 0
+fsub                 1043      MATCH  -3 vs -3
+fsub                 1043      MATCH  3 vs 3
+fadd                  975      MATCH  7 vs 7
 
 === fmove/fmovem memory-operand probe (checklist #4) ===
 op                               cycles       ok  note
@@ -147,10 +165,10 @@ fdiv.x fp1,fp0 (FPCR single)             1041      MATCH  2.3333332538604736 vs 
 
 === opcode-chaining probe (checklist #6) ===
 op                                     cycles      match  note
-fadd,fadd (chain of 2)                   1661      MATCH  8 vs 8
-fadd,fmul (chain of 2)                   1872      MATCH  15 vs 15
-fadd,fadd,fadd (chain of 3)              2345      MATCH  11 vs 11
-fadd,nop (must NOT chain)                 951      MATCH  5 vs 5
+fadd,fadd (chain of 2)                   1645      MATCH  8 vs 8
+fadd,fmul (chain of 2)                   1864      MATCH  15 vs 15
+fadd,fadd,fadd (chain of 3)              2321      MATCH  11 vs 11
+fadd,nop (must NOT chain)                 943      MATCH  5 vs 5
 
 === EA-decode fast-path probe (checklist #8) ===
 op                           cycles      match  note
