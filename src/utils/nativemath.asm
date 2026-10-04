@@ -739,3 +739,259 @@ LognC3		dc.l	$3ffc0000,$92492492,$49249249	; 1/7
 LognC2		dc.l	$3ffc0000,$cccccccc,$cccccccd	; 1/5
 LognC1		dc.l	$3ffd0000,$aaaaaaaa,$aaaaaaab	; 1/3
 LognC0		dc.l	$3fff0000,$80000000,$00000000	; 1/1
+
+
+;
+; Native sin(x) and cos(x), computed together (checklist #10):
+; standard quadrant range reduction (x = n*(pi/2) + r, n = round(x *
+; 2/pi), |r| <= pi/4) then separate Horner-evaluated Maclaurin
+; polynomials for sin(r)/cos(r), then the usual sin/cos-of-sum
+; quadrant table to turn (sin(r),cos(r)) back into (sin(x),cos(x)).
+; One routine instead of two, since fsin.asm/fcos.asm/the future
+; fsincos.asm all need the exact same reduction and only the final
+; quadrant-table result differs -- a second (and third) caller showing
+; up immediately is what justifies sharing this, not speculation.
+;
+; n mod 4 selects the quadrant via the standard identities:
+;   n&3=0: sin(x)= sin(r), cos(x)= cos(r)
+;   n&3=1: sin(x)= cos(r), cos(x)=-sin(r)
+;   n&3=2: sin(x)=-sin(r), cos(x)=-cos(r)
+;   n&3=3: sin(x)=-cos(r), cos(x)= sin(r)
+; "n&3" (not a general mod) relies on n being two's-complement and 4
+; being a power of two -- it gives the correct 0..3 result even for
+; negative n (e.g. n=-1, all-ones, &3 = 3 = the correct floor-mod),
+; the same trick NativeFsqrt's parity split uses for its own exponent.
+;
+; 11 terms per series (verified in Python, exact Decimal arithmetic
+; against an independently-derived high-precision pi, 50000+ random
+; |r|<=pi/4 samples plus the r=0/r=+-pi/4 boundary cases) bring each
+; series' OWN truncation error to a small fraction of a ULP, the same
+; margin #10's other rows use. The range reduction itself uses a
+; single 64-bit-mantissa pi/2 constant (SinCosHalfPi below), not a
+; multi-word one -- verified in Python to stay accurate to within
+; double precision for |x| up to a few thousand (the catastrophic-
+; cancellation error in x-n*(pi/2) grows with |x|, same as any "plain"
+; sin/cos implementation without Payne-Hanek-style huge-argument
+; reduction); nothing in this codebase's own test range comes close to
+; that, and chasing arbitrary-magnitude accuracy is explicitly out of
+; scope for a row whose point is portability, not precision records.
+;
+; INPUTS
+;	d0 -- Sign(1):exponent(15):reserved(16). Must be an ordinary
+;	      (finite, non-NaN/Inf) value -- callers (fsin.asm/fcos.asm)
+;	      are responsible for the Inf/NaN special cases before calling
+;	      this (unlike fetox/fsqrt/flogn, sin/cos have no zero special
+;	      case to intercept either -- r=0 falls out of the Horner loop
+;	      correctly on its own, see flogn's own s=0 case for why).
+;	d1 -- Mantissa bits 63-32 (explicit integer bit at bit 31).
+;	d2 -- Mantissa bits 31-0.
+;
+; RESULT
+;	d0 -- Sign(1):exponent(15):reserved(16) of sin(x).
+;	d1 -- Mantissa bits 63-32 of sin(x).
+;	d2 -- Mantissa bits 31-0 of sin(x).
+;	d3 -- Sign(1):exponent(15):reserved(16) of cos(x).
+;	d4 -- Mantissa bits 63-32 of cos(x).
+;	d5 -- Mantissa bits 31-0 of cos(x).
+;
+NativeFsincos
+	move.l			d0,SincosX
+	move.l			d1,SincosX+4
+	move.l			d2,SincosX+8
+
+	; n = round(x * 2/pi); q = n&3, stashed before d0 gets clobbered
+	; by the IntToExtended/Fmul calls r's own computation needs.
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	lea.l			SinCosInvHalfPi,a0
+	movem.l			(a0),d0/d1/d2
+	jsr				NativeFmul
+	jsr				NativeRoundToInt
+	move.l			d0,d6
+	and.l			#3,d6
+	move.l			d6,SincosQ
+
+	; r = x - n*(pi/2)
+	jsr				NativeIntToExtended
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	lea.l			SinCosHalfPi,a0
+	movem.l			(a0),d0/d1/d2
+	jsr				NativeFmul
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	move.l			SincosX,d0
+	move.l			SincosX+4,d1
+	move.l			SincosX+8,d2
+	jsr				NativeFsub
+	move.l			d0,SincosR
+	move.l			d1,SincosR+4
+	move.l			d2,SincosR+8
+
+	; t = r^2 (shared by both Horner loops below)
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	jsr				NativeFmul
+	move.l			d0,SincosT
+	move.l			d1,SincosT+4
+	move.l			d2,SincosT+8
+
+	; cos(r): result = CosC10; for n=9 downto 0, result := result*t +
+	; CosCn. Same address-increment trick as NativeFexp's own Horner
+	; loop (see there for why the constants are declared highest-
+	; term-first in source, lowest-address-first in memory).
+	lea.l			CosC10,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			d0,SincosCosR
+	move.l			d1,SincosCosR+4
+	move.l			d2,SincosCosR+8
+	lea.l			CosC9,a0
+	move.l			#9,SincosIterCount
+	.CosLoop:
+	move.l			SincosCosR,d0
+	move.l			SincosCosR+4,d1
+	move.l			SincosCosR+8,d2
+	move.l			SincosT,d3
+	move.l			SincosT+4,d4
+	move.l			SincosT+8,d5
+	jsr				NativeFmul
+	move.l			d0,SincosCosR
+	move.l			d1,SincosCosR+4
+	move.l			d2,SincosCosR+8
+	move.l			SincosCosR,d0
+	move.l			SincosCosR+4,d1
+	move.l			SincosCosR+8,d2
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFadd
+	move.l			d0,SincosCosR
+	move.l			d1,SincosCosR+4
+	move.l			d2,SincosCosR+8
+	adda.l			#12,a0
+	subq.l			#1,SincosIterCount
+	bpl.w			.CosLoop
+
+	; sin(r) = r * (SinC10 Horner-evaluated the same way)
+	lea.l			SinC10,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			d0,SincosSinR
+	move.l			d1,SincosSinR+4
+	move.l			d2,SincosSinR+8
+	lea.l			SinC9,a0
+	move.l			#9,SincosIterCount
+	.SinLoop:
+	move.l			SincosSinR,d0
+	move.l			SincosSinR+4,d1
+	move.l			SincosSinR+8,d2
+	move.l			SincosT,d3
+	move.l			SincosT+4,d4
+	move.l			SincosT+8,d5
+	jsr				NativeFmul
+	move.l			d0,SincosSinR
+	move.l			d1,SincosSinR+4
+	move.l			d2,SincosSinR+8
+	move.l			SincosSinR,d0
+	move.l			SincosSinR+4,d1
+	move.l			SincosSinR+8,d2
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFadd
+	move.l			d0,SincosSinR
+	move.l			d1,SincosSinR+4
+	move.l			d2,SincosSinR+8
+	adda.l			#12,a0
+	subq.l			#1,SincosIterCount
+	bpl.w			.SinLoop
+	move.l			SincosSinR,d0
+	move.l			SincosSinR+4,d1
+	move.l			SincosSinR+8,d2
+	move.l			SincosR,d3
+	move.l			SincosR+4,d4
+	move.l			SincosR+8,d5
+	jsr				NativeFmul
+	move.l			d0,SincosSinR
+	move.l			d1,SincosSinR+4
+	move.l			d2,SincosSinR+8
+
+	; Quadrant table: turn (sin(r),cos(r)) into (sin(x),cos(x)).
+	; RESULT -- d0:d1:d2 = sin(x), d3:d4:d5 = cos(x).
+	move.l			SincosQ,d6
+	tst.l			d6
+	beq.s			.Q0
+	cmp.l			#1,d6
+	beq.s			.Q1
+	cmp.l			#2,d6
+	beq.s			.Q2
+	; Q3: sin(x) = -cos(r), cos(x) = sin(r)
+	move.l			SincosCosR,d0
+	move.l			SincosCosR+4,d1
+	move.l			SincosCosR+8,d2
+	bchg			#31,d0
+	move.l			SincosSinR,d3
+	move.l			SincosSinR+4,d4
+	move.l			SincosSinR+8,d5
+	rts
+	.Q0:
+	; sin(x) = sin(r), cos(x) = cos(r)
+	move.l			SincosSinR,d0
+	move.l			SincosSinR+4,d1
+	move.l			SincosSinR+8,d2
+	move.l			SincosCosR,d3
+	move.l			SincosCosR+4,d4
+	move.l			SincosCosR+8,d5
+	rts
+	.Q1:
+	; sin(x) = cos(r), cos(x) = -sin(r)
+	move.l			SincosCosR,d0
+	move.l			SincosCosR+4,d1
+	move.l			SincosCosR+8,d2
+	move.l			SincosSinR,d3
+	move.l			SincosSinR+4,d4
+	move.l			SincosSinR+8,d5
+	bchg			#31,d3
+	rts
+	.Q2:
+	; sin(x) = -sin(r), cos(x) = -cos(r)
+	move.l			SincosSinR,d0
+	move.l			SincosSinR+4,d1
+	move.l			SincosSinR+8,d2
+	bchg			#31,d0
+	move.l			SincosCosR,d3
+	move.l			SincosCosR+4,d4
+	move.l			SincosCosR+8,d5
+	bchg			#31,d3
+	rts
+
+SinCosHalfPi	dc.l	$3fff0000,$c90fdaa2,$2168c235	; pi/2
+SinCosInvHalfPi	dc.l	$3ffe0000,$a2f9836e,$4e44152a	; 2/pi
+SincosX			dc.l	0,0,0
+SincosQ			dc.l	0
+SincosR			dc.l	0,0,0
+SincosT			dc.l	0,0,0
+SincosSinR		dc.l	0,0,0
+SincosCosR		dc.l	0,0,0
+SincosIterCount	dc.l	0
+SinC10		dc.l	$3fbd0000,$b8dc77b6,$e7ab8c5f	; +1/21!
+SinC9		dc.l	$bfc60000,$97a4da34,$0a0ab926	; -1/19!
+SinC8		dc.l	$3fce0000,$ca963b81,$856a5359	; +1/17!
+SinC7		dc.l	$bfd60000,$d73f9f39,$9dc0f88f	; -1/15!
+SinC6		dc.l	$3fde0000,$b092309d,$43684be5	; +1/13!
+SinC5		dc.l	$bfe50000,$d7322b3f,$aa271c7f	; -1/11!
+SinC4		dc.l	$3fec0000,$b8ef1d2a,$b6399c7d	; +1/9!
+SinC3		dc.l	$bff20000,$d00d00d0,$0d00d00d	; -1/7!
+SinC2		dc.l	$3ff80000,$88888888,$88888889	; +1/5!
+SinC1		dc.l	$bffc0000,$aaaaaaaa,$aaaaaaab	; -1/3!
+SinC0		dc.l	$3fff0000,$80000000,$00000000	; +1/1!
+CosC10		dc.l	$3fc10000,$f2a15d20,$1011283d	; +1/20!
+CosC9		dc.l	$bfca0000,$b413c31d,$cbecbbde	; -1/18!
+CosC8		dc.l	$3fd20000,$d73f9f39,$9dc0f88f	; +1/16!
+CosC7		dc.l	$bfda0000,$c9cba546,$03e4e906	; -1/14!
+CosC6		dc.l	$3fe20000,$8f76c77f,$c6c4bdaa	; +1/12!
+CosC5		dc.l	$bfe90000,$93f27dbb,$c4fae397	; -1/10!
+CosC4		dc.l	$3fef0000,$d00d00d0,$0d00d00d	; +1/8!
+CosC3		dc.l	$bff50000,$b60b60b6,$0b60b60b	; -1/6!
+CosC2		dc.l	$3ffa0000,$aaaaaaaa,$aaaaaaab	; +1/4!
+CosC1		dc.l	$bffe0000,$80000000,$00000000	; -1/2!
+CosC0		dc.l	$3fff0000,$80000000,$00000000	; +1/0!
