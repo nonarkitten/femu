@@ -515,3 +515,222 @@ ExpC3		dc.l	$3ffc0000,$aaaaaaaa,$aaaaaaab	; 1/3!
 ExpC2		dc.l	$3ffe0000,$80000000,$00000000	; 1/2!
 ExpC1		dc.l	$3fff0000,$80000000,$00000000	; 1/1!
 ExpC0		dc.l	$3fff0000,$80000000,$00000000	; 1/0!
+
+
+;
+; Native ln(x) (checklist #10): x = m * 2^e, m in [1,2) -- read
+; directly from the operand's own exponent/mantissa split, no bit-
+; shifting needed (the same free normalization #10's other routines
+; already rely on). ln(x) = ln(m) + e*ln(2), with e*ln(2) reusing
+; NativeFexp's own ExpLn2 constant above rather than a second copy.
+;
+; ln(m) uses the atanh series: s = (m-1)/(m+1), ln(m) = 2*atanh(s) =
+; 2*s*(1 + s^2/3 + s^4/5 + s^6/7 + ...). m in [1,2) alone gives s up to
+; 1/3, needing an impractically long series (verified in Python: ~20
+; terms for 2^-63) -- so m is first centered against sqrt(2): if
+; m >= sqrt(2), m := m/sqrt(2) and ln(2)/2 is added back once ln(m/
+; sqrt(2)) is known (ln(m) = ln(m/sqrt(2)) + ln(sqrt(2))); otherwise m
+; is already in [1,sqrt(2)) and the correction is 0. This halves s's
+; range to at most (sqrt(2)-1)/(sqrt(2)+1) ~= 0.1716, and since m and
+; sqrt(2) share the same exponent (16383) by construction, "m >=
+; sqrt(2)" is just an unsigned 64-bit mantissa compare -- no general
+; float comparison needed.
+;
+; 13 terms (1/1, 1/3, ..., 1/25) were verified in Python (exact Decimal
+; arithmetic, 300000+ random samples plus the m=1/m->sqrt(2) boundary
+; cases) to bring the series' OWN truncation error to ~0.0015 ULP
+; (this format's mantissa precision) across the whole reduced range,
+; well before writing any assembly -- same margin #10's other rows use.
+;
+; INPUTS
+;	d0 -- Sign(1):exponent(15):reserved(16). Must be an ordinary
+;	      (finite, positive, nonzero, non-NaN/Inf) value -- callers
+;	      (flogn.asm) are responsible for the 0/negative/Inf/NaN
+;	      special cases before calling this.
+;	d1 -- Mantissa bits 63-32 (explicit integer bit at bit 31).
+;	d2 -- Mantissa bits 31-0.
+;
+; RESULT
+;	d0 -- Sign(1):exponent(15):reserved(16) of ln(x).
+;	d1 -- Mantissa bits 63-32 of ln(x).
+;	d2 -- Mantissa bits 31-0 of ln(x).
+;
+NativeFlogn
+	; e = biased exponent - 16383 (signed); m = operand with its
+	; exponent field replaced by 16383 (mantissa bits d1:d2 untouched
+	; -- the operand is already normalized, so this literally IS m).
+	bfextu			d0{1:15},d6
+	sub.l			#16383,d6
+	move.l			d6,LognE
+	move.l			#$3fff0000,d0
+
+	; Correction defaults to 0; becomes ln(2)/2 below if m needs
+	; centering against sqrt(2).
+	moveq			#0,d6
+	move.l			d6,LognCorrection
+	move.l			d6,LognCorrection+4
+	move.l			d6,LognCorrection+8
+
+	cmp.l			LognConstSqrt2+4,d1
+	bhi.s			.NeedsCenter
+	blo.s			.NoCenter
+	cmp.l			LognConstSqrt2+8,d2
+	blo.s			.NoCenter
+	.NeedsCenter:
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	lea.l			LognConstInvSqrt2,a0
+	movem.l			(a0),d0/d1/d2
+	jsr				NativeFmul
+	lea.l			LognConstHalfLn2,a0
+	movem.l			(a0),d3/d4/d5
+	move.l			d3,LognCorrection
+	move.l			d4,LognCorrection+4
+	move.l			d5,LognCorrection+8
+	.NoCenter:
+
+	; s = (m-1)/(m+1)
+	move.l			d0,LognM
+	move.l			d1,LognM+4
+	move.l			d2,LognM+8
+	lea.l			LognConstOne,a0
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFsub
+	move.l			d0,LognNum
+	move.l			d1,LognNum+4
+	move.l			d2,LognNum+8
+	move.l			LognM,d0
+	move.l			LognM+4,d1
+	move.l			LognM+8,d2
+	lea.l			LognConstOne,a0
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFadd
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	move.l			LognNum,d0
+	move.l			LognNum+4,d1
+	move.l			LognNum+8,d2
+	jsr				NativeFdiv
+	move.l			d0,LognS
+	move.l			d1,LognS+4
+	move.l			d2,LognS+8
+
+	; s2 = s*s
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	jsr				NativeFmul
+	move.l			d0,LognS2
+	move.l			d1,LognS2+4
+	move.l			d2,LognS2+8
+
+	; Horner evaluation: result = C12; for n=11 downto 0,
+	; result := result*s2 + Cn. Same address-increment trick as
+	; NativeFexp's Horner loop (see there for why the constants are
+	; declared highest-term-first in source, lowest-address-first in
+	; memory).
+	lea.l			LognC12,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			d0,LognResult
+	move.l			d1,LognResult+4
+	move.l			d2,LognResult+8
+	lea.l			LognC11,a0
+	move.l			#11,LognIterCount
+	.HornerLoop:
+	move.l			LognResult,d0
+	move.l			LognResult+4,d1
+	move.l			LognResult+8,d2
+	move.l			LognS2,d3
+	move.l			LognS2+4,d4
+	move.l			LognS2+8,d5
+	jsr				NativeFmul
+	move.l			d0,LognResult
+	move.l			d1,LognResult+4
+	move.l			d2,LognResult+8
+	move.l			LognResult,d0
+	move.l			LognResult+4,d1
+	move.l			LognResult+8,d2
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFadd
+	move.l			d0,LognResult
+	move.l			d1,LognResult+4
+	move.l			d2,LognResult+8
+	adda.l			#12,a0
+	subq.l			#1,LognIterCount
+	bpl.w			.HornerLoop
+
+	; ln(m) = 2*s*poly -- the *2 is a plain exponent bump (same
+	; technique used throughout #10), not a multiply. Always positive
+	; (s>=0, poly>0), so discarding the sign bit here is safe, same as
+	; NativeFsqrt/NativeFexp's own final bumps.
+	move.l			LognS,d0
+	move.l			LognS+4,d1
+	move.l			LognS+8,d2
+	move.l			LognResult,d3
+	move.l			LognResult+4,d4
+	move.l			LognResult+8,d5
+	jsr				NativeFmul
+	bfextu			d0{1:15},d6
+	addq.l			#1,d6
+	lsl.l			#8,d6
+	lsl.l			#8,d6
+	move.l			d6,d0
+
+	; + correction (0 or ln(2)/2, from the sqrt(2)-centering step)
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	move.l			LognCorrection,d0
+	move.l			LognCorrection+4,d1
+	move.l			LognCorrection+8,d2
+	jsr				NativeFadd
+	move.l			d0,LognLnM
+	move.l			d1,LognLnM+4
+	move.l			d2,LognLnM+8
+
+	; + e*ln(2)
+	move.l			LognE,d0
+	jsr				NativeIntToExtended
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	lea.l			ExpLn2,a0
+	movem.l			(a0),d0/d1/d2
+	jsr				NativeFmul
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	move.l			LognLnM,d0
+	move.l			LognLnM+4,d1
+	move.l			LognLnM+8,d2
+	jsr				NativeFadd
+	rts
+
+LognConstSqrt2		dc.l	$3fff0000,$b504f333,$f9de6484	; sqrt(2)
+LognConstInvSqrt2	dc.l	$3ffe0000,$b504f333,$f9de6484	; 1/sqrt(2)
+LognConstHalfLn2	dc.l	$3ffd0000,$b17217f7,$d1cf79ac	; ln(2)/2
+LognConstOne		dc.l	$3fff0000,$80000000,$00000000	; 1.0
+LognE				dc.l	0
+LognCorrection		dc.l	0,0,0
+LognM				dc.l	0,0,0
+LognNum				dc.l	0,0,0
+LognS				dc.l	0,0,0
+LognS2				dc.l	0,0,0
+LognResult			dc.l	0,0,0
+LognIterCount		dc.l	0
+LognLnM				dc.l	0,0,0
+LognC12		dc.l	$3ffa0000,$a3d70a3d,$70a3d70a	; 1/25
+LognC11		dc.l	$3ffa0000,$b21642c8,$590b2164	; 1/23
+LognC10		dc.l	$3ffa0000,$c30c30c3,$0c30c30c	; 1/21
+LognC9		dc.l	$3ffa0000,$d79435e5,$0d79435e	; 1/19
+LognC8		dc.l	$3ffa0000,$f0f0f0f0,$f0f0f0f1	; 1/17
+LognC7		dc.l	$3ffb0000,$88888888,$88888889	; 1/15
+LognC6		dc.l	$3ffb0000,$9d89d89d,$89d89d8a	; 1/13
+LognC5		dc.l	$3ffb0000,$ba2e8ba2,$e8ba2e8c	; 1/11
+LognC4		dc.l	$3ffb0000,$e38e38e3,$8e38e38e	; 1/9
+LognC3		dc.l	$3ffc0000,$92492492,$49249249	; 1/7
+LognC2		dc.l	$3ffc0000,$cccccccc,$cccccccd	; 1/5
+LognC1		dc.l	$3ffd0000,$aaaaaaaa,$aaaaaaab	; 1/3
+LognC0		dc.l	$3fff0000,$80000000,$00000000	; 1/1

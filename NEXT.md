@@ -248,10 +248,25 @@ to 128 (`bench/src/harness.c`) — they silently truncated past 64 with no
 error, so the 5 new `fetox` vectors added past that point weren't
 actually running even though the suite reported all-MATCH.
 
-Next up in this row: `flogn` (foundational — unlocks `ftwotox`/
-`ftentox`'s general case, `flog2`/`flog10`, and `fsinh`/`fcosh`/`ftanh` as
-cheap derivations once native), then `fsin`/`fcos` (foundational for
-`ftan`/`fsincos`), then `fatan` (foundational for `fasin`/`facos` via
+`flogn`'s general case is also done now (see `README.md`'s `#10` row for
+the full writeup): `NativeFlogn` reads `x = m*2^e` directly off the
+operand (free, no shifting), computes `ln(m)` via the atanh series
+`s=(m-1)/(m+1)`, `ln(m)=2*s*(1+s^2/3+s^4/5+...)` with `m` first centered
+against `sqrt(2)` to keep `s` small enough for a 13-term series, then
+adds `e*ln(2)` (reusing `NativeFexp`'s own `ExpLn2` constant). Landing
+its NaN-producing special cases (negative `x`, `-Inf`) surfaced a real
+bench harness bug: every `MATCH`/`DIFFER` check used a bare `==`, which
+is *always* false for a correct NaN result (IEEE: `NaN != NaN`) — fixed
+with a `values_match()` helper used at all 5 comparison sites in
+`bench/src/harness.c`, not just this row's new vectors.
+
+Next up in this row: now that `fetox`/`flogn` are both native,
+`ftwotox`/`ftentox`'s general case and `flog2`/`flog10` are cheap
+derivations (`x^y = e^(y*ln(x))`, `log_b(x) = ln(x)/ln(b)`) rather than
+needing their own algorithms, and `fsinh`/`fcosh`/`ftanh` derive from
+`fetox` directly — worth picking off before the two rows that still need
+real new algorithms: `fsin`/`fcos` (foundational for `ftan`/`fsincos`),
+then `fatan` (foundational for `fasin`/`facos` via
 `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too). `#11`
 (fmovem bulk register move fix) remains untouched and fair game any time.
 

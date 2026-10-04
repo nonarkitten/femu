@@ -30,14 +30,51 @@ FlognHandler
 	bra.w			.FastDone
 	.NotOne:
 
-	jsr				InternalToDouble
+	; Native ln(x) (checklist #10): no library call anywhere in this op
+	; any more.
+	;
+	; Zero (either sign, denormal-as-zero convention): ln(0) = -Inf, a
+	; pole error -- matches every host libm's behaviour (same
+	; convention checked elsewhere in this codebase).
+	bfextu			d0{1:15},d6
+	bne.s			.NotZero
+	move.l			#$ffff0000,d0
+	move.l			#$80000000,d1
+	moveq			#0,d2
+	bra.w			.FastDone
+	.NotZero:
 
-	; Emulate instruction
-	movea.l			MathIeeeDoubTransBase,a6
-	jsr				_LVOIEEEDPLog(a6)
+	; Infinity/NaN (exponent field all-ones): +Inf passes through
+	; unchanged (ln(+Inf)=+Inf, self-identical); -Inf constructs a NaN
+	; (ln of a negative value, even an infinite one, isn't real); an
+	; actual NaN passes through unchanged -- discriminated the same way
+	; SETCC itself does (a mantissa that ISN'T the clean explicit-bit-
+	; only Infinity pattern is a NaN, not Infinity).
+	cmp.l			#32767,d6
+	bne.s			.Finite
+	cmp.l			#$80000000,d1
+	bne.w			.FastDone
+	tst.l			d2
+	bne.w			.FastDone
+	btst			#31,d0
+	beq.w			.FastDone
+	move.l			#$7fff0000,d0
+	move.l			#$ffffffff,d1
+	move.l			#$ffffffff,d2
+	bra.w			.FastDone
+	.Finite:
 
-	; Write results
-	jsr				DoubleToInternal
+	; Ordinary finite nonzero: negative constructs a NaN (ln of a
+	; negative number isn't real, same pattern as -Inf above); positive
+	; goes through NativeFlogn's atanh series (src/utils/nativemath.asm).
+	btst			#31,d0
+	beq.s			.Positive
+	move.l			#$7fff0000,d0
+	move.l			#$ffffffff,d1
+	move.l			#$ffffffff,d2
+	bra.w			.FastDone
+	.Positive:
+	jsr				NativeFlogn
 	.FastDone:
 	GETREGISTER		d5
 	MOVEDNTOFPN		d5,d0,d1,d2

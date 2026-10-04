@@ -84,3 +84,12 @@
 	fsub.x		fp1,fp0
 	fsub.x		fp1,fp0
 	fadd.x		fp1,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
+	flogn.x		fp0,fp0
