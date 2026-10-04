@@ -995,3 +995,291 @@ CosC3		dc.l	$bff50000,$b60b60b6,$0b60b60b	; -1/6!
 CosC2		dc.l	$3ffa0000,$aaaaaaaa,$aaaaaaab	; +1/4!
 CosC1		dc.l	$bffe0000,$80000000,$00000000	; -1/2!
 CosC0		dc.l	$3fff0000,$80000000,$00000000	; +1/0!
+
+
+;
+; Native atan(x) (checklist #10): the one function in this row needing
+; a genuinely new algorithm rather than a derivation from fexp/flogn/
+; fsincos -- atan's own Gregory series (x - x^3/3 + x^5/5 - ...)
+; converges far too slowly to use directly (geometric-ish decay by x^2
+; per term, not factorial like sin/cos/exp's series), so two range-
+; reduction identities are chained before any series is evaluated:
+;
+;   1. atan is odd: work with |x|, reapply the sign at the very end.
+;   2. |x| > 1: atan(x) = pi/2 - atan(1/x), reducing to |x| <= 1.
+;   3. |x| > tan(pi/8) (= sqrt(2)-1): atan(x) = pi/4 + atan((x-1)/(x+1)),
+;      reducing to |x| <= tan(pi/8) ~= 0.41421356 (step 3's (x-1)/(x+1)
+;      is always <= 0 for x in (tan(pi/8),1], but still bounded in
+;      magnitude by tan(pi/8) -- verified in Python alongside the term
+;      count below).
+;
+; After both reductions, |x| <= tan(pi/8) and the Gregory series
+; (rewritten as x * sum_k (-1)^k*x^(2k)/(2k+1), Horner-evaluated in
+; t=x^2, same shape as every other row-#10 series) needs 25 terms (C0
+; through C24) -- verified in Python (exact Decimal arithmetic, 2000+
+; samples spanning the whole reduced range including its x=tan(pi/8)
+; edge) to bring the series' OWN truncation error below 2^-64 there,
+; with the usual small safety margin over the 23 terms Python found
+; were the actual minimum. This is a longer table than fexp/flogn/
+; sincos needed (16/13/11 terms respectively) because the Gregory
+; series has no factorial in its denominator -- just 2k+1 -- so it
+; decays only geometrically (~0.17 per term here) rather than
+; super-exponentially; a real cost of this identity, not a mistake.
+;
+; pi/2 reuses SinCosHalfPi (NativeFsincos, above) rather than a second
+; copy, same reasoning as NativeFlogn reusing NativeFexp's ExpLn2 --
+; verified in Python that AtanConstQuarterPi below is bit-for-bit the
+; same mantissa as SinCosHalfPi with the exponent field one lower
+; (pi/4 = pi/2 / 2, an exact halving), so only ONE extra pi-derived
+; constant (pi/4) needed declaring here.
+;
+; The two "is x bigger than this constant" tests (step 2 against 1.0,
+; step 3 against tan(pi/8)) are a plain 3-word unsigned lexicographic
+; compare -- valid because both operands are positive, finite,
+; normalized extended values (reserved bits zero), so bit-pattern order
+; equals numeric order exactly like IEEE single/double. Duplicated
+; rather than factored into a shared compare routine: there are exactly
+; two call sites, both inside this one routine, matching the "copy the
+; ten lines when a second caller shows up, don't speculatively
+; abstract" rule as literally as it gets.
+;
+; INPUTS
+;	d0 -- Sign(1):exponent(15):reserved(16). Must be an ordinary
+;	      (finite, nonzero, non-NaN/Inf) value -- callers (fatan.asm)
+;	      are responsible for the 0/Inf/NaN special cases before
+;	      calling this.
+;	d1 -- Mantissa bits 63-32 (explicit integer bit at bit 31).
+;	d2 -- Mantissa bits 31-0.
+;
+; RESULT
+;	d0 -- Sign(1):exponent(15):reserved(16) of atan(x).
+;	d1 -- Mantissa bits 63-32 of atan(x).
+;	d2 -- Mantissa bits 31-0 of atan(x).
+;
+NativeFatan
+	; Split off the sign (atan is odd -- reapplied at the very end) and
+	; keep working with |x| only, stashed in memory since every jsr
+	; below clobbers d0-d5 freely and d6 isn't preserved across one
+	; either (see this file's own header comment).
+	move.l			d0,d6
+	and.l			#$80000000,d6
+	move.l			d6,AtanSign
+	and.l			#$7fffffff,d0
+	move.l			d0,AtanX
+	move.l			d1,AtanX+4
+	move.l			d2,AtanX+8
+	moveq			#0,d6
+	move.l			d6,AtanRecip
+	move.l			d6,AtanHalf
+
+	; recip = |x| > 1.0 ?
+	move.l			AtanX,d0
+	cmp.l			AtanConstOne,d0
+	bhi.s			.Recip
+	blo.s			.NoRecip
+	move.l			AtanX+4,d1
+	cmp.l			AtanConstOne+4,d1
+	bhi.s			.Recip
+	blo.s			.NoRecip
+	move.l			AtanX+8,d2
+	cmp.l			AtanConstOne+8,d2
+	bls.s			.NoRecip
+	.Recip:
+	moveq			#1,d6
+	move.l			d6,AtanRecip
+	.NoRecip:
+
+	tst.l			AtanRecip
+	beq.s			.NoRecipDiv
+
+	; x := 1.0/x
+	lea.l			AtanConstOne,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			AtanX,d3
+	move.l			AtanX+4,d4
+	move.l			AtanX+8,d5
+	jsr				NativeFdiv
+	move.l			d0,AtanX
+	move.l			d1,AtanX+4
+	move.l			d2,AtanX+8
+	.NoRecipDiv:
+
+	; half = |x| > tan(pi/8) ?
+	move.l			AtanX,d0
+	cmp.l			AtanConstTanPi8,d0
+	bhi.s			.Half
+	blo.s			.NoHalf
+	move.l			AtanX+4,d1
+	cmp.l			AtanConstTanPi8+4,d1
+	bhi.s			.Half
+	blo.s			.NoHalf
+	move.l			AtanX+8,d2
+	cmp.l			AtanConstTanPi8+8,d2
+	bls.s			.NoHalf
+	.Half:
+	moveq			#1,d6
+	move.l			d6,AtanHalf
+	.NoHalf:
+
+	tst.l			AtanHalf
+	beq.s			.NoHalfDiv
+
+	; x := (x-1)/(x+1)
+	move.l			AtanX,d0
+	move.l			AtanX+4,d1
+	move.l			AtanX+8,d2
+	lea.l			AtanConstOne,a0
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFsub
+	move.l			d0,AtanNum
+	move.l			d1,AtanNum+4
+	move.l			d2,AtanNum+8
+	move.l			AtanX,d0
+	move.l			AtanX+4,d1
+	move.l			AtanX+8,d2
+	lea.l			AtanConstOne,a0
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFadd
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	move.l			AtanNum,d0
+	move.l			AtanNum+4,d1
+	move.l			AtanNum+8,d2
+	jsr				NativeFdiv
+	move.l			d0,AtanX
+	move.l			d1,AtanX+4
+	move.l			d2,AtanX+8
+	.NoHalfDiv:
+
+	; t = x*x
+	move.l			AtanX,d0
+	move.l			AtanX+4,d1
+	move.l			AtanX+8,d2
+	move.l			d0,d3
+	move.l			d1,d4
+	move.l			d2,d5
+	jsr				NativeFmul
+	move.l			d0,AtanT
+	move.l			d1,AtanT+4
+	move.l			d2,AtanT+8
+
+	; Horner evaluation: result = C24; for n=23 downto 0,
+	; result := result*t + Cn. Same address-increment trick as
+	; NativeFexp's own Horner loop (see there for why the constants are
+	; declared highest-term-first in source, lowest-address-first in
+	; memory).
+	lea.l			AtanC24,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			d0,AtanResult
+	move.l			d1,AtanResult+4
+	move.l			d2,AtanResult+8
+	lea.l			AtanC23,a0
+	move.l			#23,AtanIterCount
+	.HornerLoop:
+	move.l			AtanResult,d0
+	move.l			AtanResult+4,d1
+	move.l			AtanResult+8,d2
+	move.l			AtanT,d3
+	move.l			AtanT+4,d4
+	move.l			AtanT+8,d5
+	jsr				NativeFmul
+	move.l			d0,AtanResult
+	move.l			d1,AtanResult+4
+	move.l			d2,AtanResult+8
+	move.l			AtanResult,d0
+	move.l			AtanResult+4,d1
+	move.l			AtanResult+8,d2
+	movem.l			(a0),d3/d4/d5
+	jsr				NativeFadd
+	move.l			d0,AtanResult
+	move.l			d1,AtanResult+4
+	move.l			d2,AtanResult+8
+	adda.l			#12,a0
+	subq.l			#1,AtanIterCount
+	bpl.w			.HornerLoop
+
+	; result = x * poly
+	move.l			AtanX,d0
+	move.l			AtanX+4,d1
+	move.l			AtanX+8,d2
+	move.l			AtanResult,d3
+	move.l			AtanResult+4,d4
+	move.l			AtanResult+8,d5
+	jsr				NativeFmul
+	move.l			d0,AtanResult
+	move.l			d1,AtanResult+4
+	move.l			d2,AtanResult+8
+
+	; + pi/4, if the half-angle identity was used
+	tst.l			AtanHalf
+	beq.s			.NoHalfAdd
+	lea.l			AtanConstQuarterPi,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			AtanResult,d3
+	move.l			AtanResult+4,d4
+	move.l			AtanResult+8,d5
+	jsr				NativeFadd
+	move.l			d0,AtanResult
+	move.l			d1,AtanResult+4
+	move.l			d2,AtanResult+8
+	.NoHalfAdd:
+
+	; pi/2 - result, if the reciprocal identity was used
+	tst.l			AtanRecip
+	beq.s			.NoRecipSub
+	lea.l			SinCosHalfPi,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			AtanResult,d3
+	move.l			AtanResult+4,d4
+	move.l			AtanResult+8,d5
+	jsr				NativeFsub
+	move.l			d0,AtanResult
+	move.l			d1,AtanResult+4
+	move.l			d2,AtanResult+8
+	.NoRecipSub:
+
+	; Reapply the original sign (atan is odd).
+	move.l			AtanResult,d0
+	move.l			AtanSign,d6
+	or.l			d6,d0
+	move.l			AtanResult+4,d1
+	move.l			AtanResult+8,d2
+	rts
+
+AtanConstOne		dc.l	$3fff0000,$80000000,$00000000	; 1.0
+AtanConstTanPi8		dc.l	$3ffd0000,$d413cccf,$e7799211	; tan(pi/8)
+AtanConstQuarterPi	dc.l	$3ffe0000,$c90fdaa2,$2168c235	; pi/4
+AtanSign		dc.l	0
+AtanRecip		dc.l	0
+AtanHalf		dc.l	0
+AtanX			dc.l	0,0,0
+AtanNum			dc.l	0,0,0
+AtanT			dc.l	0,0,0
+AtanResult		dc.l	0,0,0
+AtanIterCount		dc.l	0
+AtanC24		dc.l	$3ff90000,$a72f0539,$7829cbc1	; +1/49
+AtanC23		dc.l	$bff90000,$ae4c415c,$9882b931	; -1/47
+AtanC22		dc.l	$3ff90000,$b60b60b6,$0b60b60b	; +1/45
+AtanC21		dc.l	$bff90000,$be82fa0b,$e82fa0bf	; -1/43
+AtanC20		dc.l	$3ff90000,$c7ce0c7c,$e0c7ce0c	; +1/41
+AtanC19		dc.l	$bff90000,$d20d20d2,$0d20d20d	; -1/39
+AtanC18		dc.l	$3ff90000,$dd67c8a6,$0dd67c8a	; +1/37
+AtanC17		dc.l	$bff90000,$ea0ea0ea,$0ea0ea0f	; -1/35
+AtanC16		dc.l	$3ff90000,$f83e0f83,$e0f83e10	; +1/33
+AtanC15		dc.l	$bffa0000,$84210842,$10842108	; -1/31
+AtanC14		dc.l	$3ffa0000,$8d3dcb08,$d3dcb08d	; +1/29
+AtanC13		dc.l	$bffa0000,$97b425ed,$097b425f	; -1/27
+AtanC12		dc.l	$3ffa0000,$a3d70a3d,$70a3d70a	; +1/25
+AtanC11		dc.l	$bffa0000,$b21642c8,$590b2164	; -1/23
+AtanC10		dc.l	$3ffa0000,$c30c30c3,$0c30c30c	; +1/21
+AtanC9		dc.l	$bffa0000,$d79435e5,$0d79435e	; -1/19
+AtanC8		dc.l	$3ffa0000,$f0f0f0f0,$f0f0f0f1	; +1/17
+AtanC7		dc.l	$bffb0000,$88888888,$88888889	; -1/15
+AtanC6		dc.l	$3ffb0000,$9d89d89d,$89d89d8a	; +1/13
+AtanC5		dc.l	$bffb0000,$ba2e8ba2,$e8ba2e8c	; -1/11
+AtanC4		dc.l	$3ffb0000,$e38e38e3,$8e38e38e	; +1/9
+AtanC3		dc.l	$bffc0000,$92492492,$49249249	; -1/7
+AtanC2		dc.l	$3ffc0000,$cccccccc,$cccccccd	; +1/5
+AtanC1		dc.l	$bffd0000,$aaaaaaaa,$aaaaaaab	; -1/3
+AtanC0		dc.l	$3fff0000,$80000000,$00000000	; +1/1

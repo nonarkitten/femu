@@ -709,9 +709,10 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 - **Status:** 🔲 In progress. Done: `fsqrt` (found along the way, not
   one of the row's original 14), `fetox`, `flogn`, `ftwotox`,
   `ftentox`, `flog2`, `flog10`, `fsinh`, `fcosh`, `ftanh`, `fsin`,
-  `fcos`, `fsincos`, `ftan`. Left: `fatan`/`fasin`/`facos` — `fatan`
-  is the one piece left needing a real new algorithm; `fasin`/`facos`
-  derive from it once it lands (`asin(x)=atan(x/sqrt(1-x^2))`).
+  `fcos`, `fsincos`, `ftan`, `fatan`. Left: `fasin`/`facos` — both
+  derive cheaply from `fatan` (`asin(x)=atan(x/sqrt(1-x^2))`,
+  `acos(x)=pi/2-asin(x)`), the last genuinely new algorithm in this
+  row having already landed with `fatan` itself.
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -1067,9 +1068,59 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   remains bit-exact (only the already-explained `fcosh(9.43)` case
   persists).
 
-  **Still to do in this row:** `fatan` (foundational for `fasin`/
-  `facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is
-  native too) is the one piece left that needs a real new algorithm.
+  **`fatan` — done.** The one function in this row needing a
+  genuinely new algorithm rather than a derivation from `fexp`/`flogn`/
+  `fsincos` — `atan`'s own Gregory series (`x - x^3/3 + x^5/5 - ...`)
+  converges far too slowly to use directly (its terms decay
+  geometrically, by roughly `x^2` each step, not by a factorial like
+  `sin`/`cos`/`e^x`'s series do), so two range-reduction identities are
+  chained first, both in `NativeFatan` (`src/utils/nativemath.asm`):
+  `atan` is odd, so only `|x|` is worked with (sign reapplied at the
+  end); `|x|>1` reduces via `atan(x)=pi/2-atan(1/x)`; then
+  `|x|>tan(pi/8)` (`=sqrt(2)-1`) reduces further via
+  `atan(x)=pi/4+atan((x-1)/(x+1))`, leaving a final range of
+  `|x|<=tan(pi/8)~=0.4142` for the series itself. Both reduction tests
+  are a plain 3-word unsigned lexicographic compare — valid because
+  both operands are positive, finite, normalized extended values, so
+  bit-pattern order equals numeric order exactly like IEEE single/
+  double (same reasoning `flogn`'s own `sqrt(2)`-centering compare
+  relies on, just not restricted to equal exponents here). `pi/2`
+  reuses `NativeFsincos`'s own `SinCosHalfPi` rather than a second
+  copy (same move as `flogn` reusing `fexp`'s `ExpLn2`); `pi/4` is one
+  new constant, verified in Python to be `SinCosHalfPi`'s exact
+  mantissa with the exponent field one lower (an exact halving).
+
+  25 Horner terms (`AtanC0`-`AtanC24`) were verified in Python (exact
+  `Decimal` arithmetic, 2000+ samples spanning the whole reduced range
+  up to and including the `x=tan(pi/8)` edge) to bring the series' own
+  truncation error below `2^-64` there — a real margin over the 23
+  terms Python found were the bare minimum, and a longer table than
+  `fexp`/`flogn`/`fsincos` needed (16/13/11 terms respectively) purely
+  because the Gregory series has no factorial in its denominator, just
+  `2k+1` — it decays only geometrically (~0.17 per term at the reduced
+  range's edge), a real cost of this identity rather than a mistake.
+
+  `atan(0)=0` is self-identical (odd function, zero either sign).
+  Unlike every *other* Inf case in this row, `atan` is NOT undefined
+  at infinity — it has genuine horizontal asymptotes at `+-pi/2`, so
+  `+-Inf` constructs a sign-kept `+-pi/2` instead of NaN; an actual NaN
+  passes through unchanged. No bugs hit while implementing this one —
+  the range-reduction identities and term count were nailed down in
+  Python before any assembly was written, same discipline as the rest
+  of this row.
+
+  **Measured** (`bench/`, register-direct, 8 new vectors: a
+  no-reduction case, a half-angle-only case, and a reciprocal-only
+  case, each with a positive and negative operand, plus zero and
+  `+Inf`/`-Inf`): every case `MATCH`es the host `atan()` bit-exactly,
+  including the pre-existing `fatan(2.25)` vector. Every other vector
+  and probe in the suite remains bit-exact (only the already-explained
+  `fcosh(9.43)` case persists).
+
+  **Still to do in this row:** `fasin`/`facos`, both cheap derivations
+  from `fatan` + `fsqrt` (`asin(x)=atan(x/sqrt(1-x^2))`,
+  `acos(x)=pi/2-asin(x)`) — no new algorithm needed, same shape as
+  `ftan`/`fsincos` falling out of `fsin`/`fcos`.
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move

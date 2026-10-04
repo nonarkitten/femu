@@ -322,10 +322,29 @@ immediately (not a logic bug, a straight-up label collision): using
 collided with `SETCC`'s own internal `.IsNan:` label once both expand
 under the same `FsincosHandler` global scope -- renamed to `.GotNan`.
 
-Next up in this row: `fatan` (foundational for `fasin`/`facos` via
-`asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too) is the
-one piece left that needs a real new algorithm. `#11` (fmovem bulk
-register move fix) remains untouched and fair game any time.
+`fatan` is also done now (see `README.md`'s `#10` row for the full
+writeup) -- the second and last piece in this row needing a real new
+algorithm, since `atan`'s own Gregory series converges too slowly
+(geometric decay, not factorial like `sin`/`cos`/`e^x`) to use
+directly. Two chained range-reduction identities first: `atan` is odd
+(work with `|x|`, sign reapplied at the end); `|x|>1` reduces via
+`atan(x)=pi/2-atan(1/x)`; `|x|>tan(pi/8)` reduces further via
+`atan(x)=pi/4+atan((x-1)/(x+1))`, leaving `|x|<=tan(pi/8)~=0.4142` for
+a 25-term Horner-evaluated series (verified in Python first, same
+discipline as every other row -- needed nearly twice `flogn`'s term
+count purely because the Gregory series decays only geometrically, not
+a mistake). `pi/2` reuses `NativeFsincos`'s own `SinCosHalfPi`; `pi/4`
+is one new constant. `+-Inf` constructs a sign-kept `+-pi/2` (unlike
+every other Inf case in this row, `atan` has real horizontal
+asymptotes, not an undefined oscillation) and an actual NaN passes
+through unchanged. No new bugs this time -- the algorithm and term
+count were nailed down in Python before any assembly was written.
+
+Next up in this row: `fasin`/`facos`, both cheap derivations from
+`fatan` + `fsqrt` (`asin(x)=atan(x/sqrt(1-x^2))`,
+`acos(x)=pi/2-asin(x)`) -- no new algorithm needed, the last two
+functions in this row. `#11` (fmovem bulk register move fix) remains
+untouched and fair game any time.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

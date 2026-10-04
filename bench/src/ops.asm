@@ -45,6 +45,14 @@
 	facos.x		fp0,fp0
 	fasin.x		fp0,fp0
 	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
+	fatan.x		fp0,fp0
 	fcos.x		fp0,fp0
 	fcosh.x		fp0,fp0
 	fetox.x		fp0,fp0
