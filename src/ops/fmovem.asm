@@ -1,10 +1,53 @@
 ;
-; TODO: this seems to be bugged, at least 080 hw fmovem fixes problems!
+; Checklist #11: fmovem's real 68881/68882 register-list order has a
+; well-known gotcha, confirmed against Musashi's own m68kfpu.c
+; (bench/vendor/musashi/m68kfpu.c, fmovem()/WRITE_EA_FPE()/READ_EA_FPE()
+; -- a real, independent reference implementation already vendored in
+; this repo) and cross-checked against the Motorola manual's own
+; description of plain MOVEM's predecrement mask convention, which
+; FMOVEM's extension-word "mode" bit (bit 12) follows exactly:
+;
+;   - Predecrement (-(An)): register-list bit N selects FPn directly
+;     (bit0=FP0 ... bit7=FP7) -- no reversal.
+;   - Postincrement/control (every other addressing mode -- (An),
+;     (An)+, (d16,An), absolute, ...): register-list bit N selects
+;     FP(7-N) instead (bit0=FP7 ... bit7=FP0) -- reversed.
+;
+; GETFMOVEMREGS below already gets this half right: it tests bit 12
+; and reverses the raw byte (REVERSEBYTE) exactly when it's set, which
+; correctly NORMALIZES either encoding back to one canonical "bit N =
+; FPn" convention before the per-register move macros run.
+;
+; What was actually wrong is downstream of that: once normalized, the
+; CORRECT memory layout is still not "ascending address = ascending FP
+; number" -- it's the opposite. Walking either real addressing mode
+; register-by-register (Musashi's WRITE_EA_FPE/READ_EA_FPE do this
+; explicitly, one register at a time) shows that the FIRST register
+; processed always lands at the address CLOSEST to the list's edge
+; nearest the un-adjusted address register, and later-processed
+; (higher-numbered, post-normalization) registers end up progressively
+; further from it -- which works out, for both predecrement and
+; postincrement/control alike, to: ascending memory address holds
+; DESCENDING FPn. The old code called the per-register move macros in
+; ascending order (FP0 first, at the lowest address) -- backwards.
+; Verified by hand-tracing both Musashi's loop and this file's own
+; macros against the same register list before touching anything.
+;
+; Fixed by reversing the literal call order of FMOVEMEAFPN/FMOVEMFPNEA
+; below (FP7 first, FP0 last) -- GETFMOVEMREGS's own normalization
+; logic needed no change at all. The pre-existing fmove_probe.asm
+; fmovem vectors encoded the SAME wrong assumption this code had (both
+; written by the same original, unfixed understanding), so they
+; "passed" without ever exercising the real bug; bench/src/harness.c's
+; expected values are corrected alongside this fix, and two new
+; vectors (predecrement store, postincrement load) were added since
+; the old vectors only used plain "(a0)" and never exercised
+; GETFMOVEMREGS's reversal path at all.
 ;
 
 
 ;
-; 
+;
 ;
 GETFMOVELENGTH macro
 	bfextu		INSTRUCTION{24:8},\1
@@ -78,14 +121,14 @@ FmovemEaRegHandler
 	GETFMOVELENGTH  d0
 	GETEA			a3
 	GETFMOVEMREGS   d4
-	FMOVEMEAFPN		0,d4
-	FMOVEMEAFPN		1,d4
-	FMOVEMEAFPN		2,d4
-	FMOVEMEAFPN		3,d4
-	FMOVEMEAFPN		4,d4
-	FMOVEMEAFPN		5,d4
-	FMOVEMEAFPN		6,d4
 	FMOVEMEAFPN		7,d4
+	FMOVEMEAFPN		6,d4
+	FMOVEMEAFPN		5,d4
+	FMOVEMEAFPN		4,d4
+	FMOVEMEAFPN		3,d4
+	FMOVEMEAFPN		2,d4
+	FMOVEMEAFPN		1,d4
+	FMOVEMEAFPN		0,d4
 	rts
 	.DEBUGOP:
 	dc.b 			"fmovem ea,reg %08lx",10,0
@@ -97,18 +140,18 @@ FmovemEaRegHandler
 ;
 FmovemRegEaHandler
 	WRITEDEBUG		#.DEBUGOP,INSTRUCTION
-	INREMENTPC	    #$04   
+	INREMENTPC	    #$04
 	GETFMOVELENGTH  d0
 	GETEA		    a3
 	GETFMOVEMREGS   d4
-	FMOVEMFPNEA	    0,d4
-	FMOVEMFPNEA	    1,d4
-	FMOVEMFPNEA	    2,d4
-	FMOVEMFPNEA	    3,d4
-	FMOVEMFPNEA	    4,d4
-	FMOVEMFPNEA	    5,d4
-	FMOVEMFPNEA	    6,d4
 	FMOVEMFPNEA	    7,d4
+	FMOVEMFPNEA	    6,d4
+	FMOVEMFPNEA	    5,d4
+	FMOVEMFPNEA	    4,d4
+	FMOVEMFPNEA	    3,d4
+	FMOVEMFPNEA	    2,d4
+	FMOVEMFPNEA	    1,d4
+	FMOVEMFPNEA	    0,d4
 	rts
 	.DEBUGOP:
 	dc.b 			"fmovem reg,ea %08lx",10,0

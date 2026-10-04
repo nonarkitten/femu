@@ -383,9 +383,31 @@ cost of everything chained, no amortization, same pattern in
 checklist (CORDIC, or a shorter per-function series that skips the
 detour through `fatan`/`fetox`/`flogn`) -- not started, not next.
 
-`#11` (fmovem bulk register move fix) is next: the only row left
-untouched from before `#10` started, now that `#13` has been recorded
-rather than chased immediately.
+`#11` (fmovem bulk register move fix) is also done now (see
+`README.md`'s `#11` row for the full writeup). The TODO ("this seems
+to be bugged, at least 080 hw fmovem fixes problems!") was real:
+real 68881/68882 FMOVEM's register-list bit order flips between
+predecrement and postincrement/control addressing (confirmed against
+an independent, already-vendored reference --
+`bench/vendor/musashi/m68kfpu.c`'s `fmovem()`, not assumed from
+memory) -- `GETFMOVEMREGS` already handled that half correctly, but
+the per-register move macros were called in ascending FP-number order
+when the real memory layout is the opposite (ascending address =
+descending FPn, for both addressing conventions alike once
+normalized). Fixed by reversing the literal macro call order (FP7
+first, FP0 last) in both handlers -- no other logic needed to change.
+
+The existing `fmove_probe.asm` fmovem vectors encoded the exact same
+wrong assumption (both written from the same original misunderstanding),
+so they passed without ever catching this, and they only used plain
+`(a0)` addressing, which never even exercises the bit-12 reversal path.
+Fixed the two existing vectors' expected values and added two new ones
+(`-(a0)` store, `(a0)+` load, each with an `a0` post-condition check)
+that actually exercise that path. All 4 fmovem vectors now report `ok`;
+rest of the suite unaffected.
+
+`#13` (CORDIC/shorter-series pass for `#10`'s transcendentals) is the
+only row left on the checklist, not started.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

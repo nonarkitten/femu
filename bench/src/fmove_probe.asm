@@ -14,3 +14,5 @@
 	fmove.d		fp0,(a0)
 	fmovem.x	(a0),fp0-fp3
 	fmovem.x	fp0-fp3,(a0)
+	fmovem.x	fp0-fp3,-(a0)
+	fmovem.x	(a0)+,fp0-fp3
