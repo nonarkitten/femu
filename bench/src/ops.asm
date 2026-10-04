@@ -43,6 +43,20 @@
 	fintrz.x	fp0,fp0
 	fsqrt.x		fp0,fp0
 	facos.x		fp0,fp0
+	facos.x		fp0,fp0
+	facos.x		fp0,fp0
+	facos.x		fp0,fp0
+	facos.x		fp0,fp0
+	facos.x		fp0,fp0
+	facos.x		fp0,fp0
+	facos.x		fp0,fp0
+	fasin.x		fp0,fp0
+	fasin.x		fp0,fp0
+	fasin.x		fp0,fp0
+	fasin.x		fp0,fp0
+	fasin.x		fp0,fp0
+	fasin.x		fp0,fp0
+	fasin.x		fp0,fp0
 	fasin.x		fp0,fp0
 	fatan.x		fp0,fp0
 	fatan.x		fp0,fp0

@@ -29,8 +29,22 @@ fneg                  656      MATCH  -12.1 vs -12.1
 fint                  971      MATCH  3 vs 3 (stub)
 fintrz                968      MATCH  2 vs 2 (stub)
 fsqrt               15379      MATCH  2.0615528128088303 vs 2.0615528128088303
-facos                 954      MATCH  0.76699400786186667 vs 0.76699400786186667 (stub)
-fasin                 954      MATCH  0.78949820934617188 vs 0.78949820934617188 (stub)
+facos               54925      MATCH  0.76699400786186667 vs 0.76699400786186667
+facos               54897      MATCH  2.3745986457279264 vs 2.3745986457279264
+facos                 684      MATCH  1.5707963267948966 vs 1.5707963267948966
+facos                 764      MATCH  0 vs 0
+facos                 768      MATCH  3.1415926535897931 vs 3.1415926535897931
+facos                 744      MATCH  nan vs nan
+facos                 730      MATCH  nan vs nan
+facos                 730      MATCH  nan vs nan
+fasin               55518      MATCH  0.78949820934617188 vs 0.78949820934617188
+fasin               55518      MATCH  -0.78949820934617188 vs -0.78949820934617188
+fasin                 668      MATCH  0 vs 0
+fasin                 766      MATCH  1.5707963267948966 vs 1.5707963267948966
+fasin                 766      MATCH  -1.5707963267948966 vs -1.5707963267948966
+fasin                 744      MATCH  nan vs nan
+fasin                 730      MATCH  nan vs nan
+fasin                 730      MATCH  nan vs nan
 fatan               35671      MATCH  1.1525719972156676 vs 1.1525719972156676
 fatan               35671      MATCH  -1.1525719972156676 vs -1.1525719972156676
 fatan               30876      MATCH  0.54041950027058416 vs 0.54041950027058416
@@ -115,20 +129,6 @@ fcosh                 730      MATCH  inf vs inf
 fcosh                 730      MATCH  inf vs inf
 ftanh               37672      MATCH  -0.99990920426259511 vs -0.99990920426259511
 ftanh                 668      MATCH  0 vs 0
-ftanh                 718      MATCH  1 vs 1
-ftanh                 718      MATCH  -1 vs -1
-fsin                20996      MATCH  0.90929742682568171 vs 0.90929742682568171
-fsin                21024      MATCH  -0.90929742682568171 vs -0.90929742682568171
-fsin                21989      MATCH  -0.7568024953079282 vs -0.7568024953079282
-fsin                22003      MATCH  -0.54402111088936977 vs -0.54402111088936977
-fsin                21997      MATCH  0.54402111088936977 vs 0.54402111088936977
-fsin                  668      MATCH  0 vs 0
-fsin                  720      MATCH  nan vs -nan
-fsin                  720      MATCH  nan vs -nan
-fcos                21002      MATCH  -0.41614683654714241 vs -0.41614683654714241
-fcos                21030      MATCH  -0.41614683654714241 vs -0.41614683654714241
-fcos                21995      MATCH  -0.65364362086361194 vs -0.65364362086361194
-fcos                22009      MATCH  -0.83907152907645244 vs -0.83907152907645244
 
 === femu.020m (NOMATHLIB) ===
 op                 cycles      match  note
@@ -160,8 +160,22 @@ fneg                  656      MATCH  -12.1 vs -12.1
 fint                 1188      MATCH  3 vs 3
 fintrz               1030      MATCH  2 vs 2
 fsqrt               15379      MATCH  2.0615528128088303 vs 2.0615528128088303
-facos                 954      MATCH  0.76699400786186667 vs 0.76699400786186667 (stub)
-fasin                 954      MATCH  0.78949820934617188 vs 0.78949820934617188 (stub)
+facos               54925      MATCH  0.76699400786186667 vs 0.76699400786186667
+facos               54897      MATCH  2.3745986457279264 vs 2.3745986457279264
+facos                 684      MATCH  1.5707963267948966 vs 1.5707963267948966
+facos                 764      MATCH  0 vs 0
+facos                 768      MATCH  3.1415926535897931 vs 3.1415926535897931
+facos                 744      MATCH  nan vs nan
+facos                 730      MATCH  nan vs nan
+facos                 730      MATCH  nan vs nan
+fasin               55518      MATCH  0.78949820934617188 vs 0.78949820934617188
+fasin               55518      MATCH  -0.78949820934617188 vs -0.78949820934617188
+fasin                 668      MATCH  0 vs 0
+fasin                 766      MATCH  1.5707963267948966 vs 1.5707963267948966
+fasin                 766      MATCH  -1.5707963267948966 vs -1.5707963267948966
+fasin                 744      MATCH  nan vs nan
+fasin                 730      MATCH  nan vs nan
+fasin                 730      MATCH  nan vs nan
 fatan               35671      MATCH  1.1525719972156676 vs 1.1525719972156676
 fatan               35671      MATCH  -1.1525719972156676 vs -1.1525719972156676
 fatan               30876      MATCH  0.54041950027058416 vs 0.54041950027058416
@@ -246,20 +260,6 @@ fcosh                 730      MATCH  inf vs inf
 fcosh                 730      MATCH  inf vs inf
 ftanh               37672      MATCH  -0.99990920426259511 vs -0.99990920426259511
 ftanh                 668      MATCH  0 vs 0
-ftanh                 718      MATCH  1 vs 1
-ftanh                 718      MATCH  -1 vs -1
-fsin                20996      MATCH  0.90929742682568171 vs 0.90929742682568171
-fsin                21024      MATCH  -0.90929742682568171 vs -0.90929742682568171
-fsin                21989      MATCH  -0.7568024953079282 vs -0.7568024953079282
-fsin                22003      MATCH  -0.54402111088936977 vs -0.54402111088936977
-fsin                21997      MATCH  0.54402111088936977 vs 0.54402111088936977
-fsin                  668      MATCH  0 vs 0
-fsin                  720      MATCH  nan vs -nan
-fsin                  720      MATCH  nan vs -nan
-fcos                21002      MATCH  -0.41614683654714241 vs -0.41614683654714241
-fcos                21030      MATCH  -0.41614683654714241 vs -0.41614683654714241
-fcos                21995      MATCH  -0.65364362086361194 vs -0.65364362086361194
-fcos                22009      MATCH  -0.83907152907645244 vs -0.83907152907645244
 
 === fmove/fmovem memory-operand probe (checklist #4) ===
 op                               cycles       ok  note

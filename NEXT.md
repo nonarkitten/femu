@@ -340,11 +340,33 @@ asymptotes, not an undefined oscillation) and an actual NaN passes
 through unchanged. No new bugs this time -- the algorithm and term
 count were nailed down in Python before any assembly was written.
 
-Next up in this row: `fasin`/`facos`, both cheap derivations from
-`fatan` + `fsqrt` (`asin(x)=atan(x/sqrt(1-x^2))`,
-`acos(x)=pi/2-asin(x)`) -- no new algorithm needed, the last two
-functions in this row. `#11` (fmovem bulk register move fix) remains
-untouched and fair game any time.
+`fasin`/`facos` are also done now (see `README.md`'s `#10` row for the
+full writeup) -- both cheap derivations, no new algorithm needed, the
+last two functions in this row. `NativeFasin` computes
+`asin(x)=atan(x/sqrt(1-x^2))` entirely from already-landed pieces;
+`facos.asm` derives `acos(x)=pi/2-asin(x)` at the op-handler level
+rather than needing its own `NativeFacos`, the same move `ftan.asm`
+already made from `NativeFsincos`. One real precision pitfall caught
+in Python first: `1-x^2` computed the obvious way (`x*x` then `1-`)
+loses precision catastrophically as `|x|->1`; factored instead as
+`(1-x)*(1+x)` -- algebraically identical, but neither sub-expression
+is a near-cancellation -- cut the measured worst-case error from
+~4.7e-15 to ~2.2e-16 (double precision, 200000 random samples) before
+any assembly was written. `asin` is odd (zero self-identical), but
+`acos` is neither odd nor even, so `facos.asm` special-cases every
+boundary directly (`0->pi/2`, `+1->0`, `-1->pi`, the last an exact
+exponent-bumped double of `pi/2`, not a second independently-rounded
+constant). Both ops special-case `|x|==1` themselves (handing it to
+`NativeFasin` would divide by a zero `sqrt`) and treat `|x|>1`/`+-Inf`
+alike as out-of-domain, constructing a NaN; an actual NaN passes
+through unchanged.
+
+**This closes out checklist `#10`.** All 14 originally named
+functions, plus `fsqrt` found along the way, now run without
+`mathieeedoubtrans.library`/`mathieeedoubbas.library` at all --
+femu's transcendentals no longer need AmigaOS, the row's whole point
+from the start. `#11` (fmovem bulk register move fix) is the only
+row left untouched and is fair game any time.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed
