@@ -34,9 +34,18 @@
 	include		"utils/ea.asm"
 	include		"utils/math64.asm"
 	include		"utils/type.asm"
+	; Core arithmetic (FE_FADD/FE_FMUL/FE_FDIV) must be included before
+	; utils/nativemath.asm, which wraps them in callable form for
+	; checklist #10's native transcendentals -- and nativemath.asm, in
+	; turn, must come before any op file that calls one of its
+	; routines. fsub.asm needs FE_FADD (fadd.asm) specifically.
+	include		"ops/fadd.asm"
+	include		"ops/fdiv.asm"
+	include		"ops/fmul.asm"
+	include		"ops/fsub.asm"
+	include		"utils/nativemath.asm"
 	include		"ops/fabs.asm"
 	include		"ops/facos.asm"
-	include		"ops/fadd.asm"
 	include		"ops/fasin.asm"
 	include		"ops/fatan.asm"
 	include		"ops/fbcc.asm"
@@ -47,7 +56,6 @@
 	include		"ops/fcos.asm"
 	include		"ops/fcosh.asm"
 	include		"ops/fdbcc.asm"
-	include		"ops/fdiv.asm"
 	include		"ops/fetox.asm"
 	include		"ops/fint.asm"
 	include		"ops/fintrz.asm"
@@ -58,8 +66,6 @@
 	include		"ops/fmovefpcr.asm"
 	include		"ops/fmovecr.asm"
 	include		"ops/fmovem.asm"
-	include		"ops/fmul.asm"
-	include		"utils/nativemath.asm"
 	include		"ops/fneg.asm"
 	include		"ops/frestore.asm"
 	include		"ops/fsave.asm"
@@ -67,7 +73,6 @@
 	include		"ops/fsin.asm"
 	include		"ops/fsincos.asm"
 	include		"ops/fsinh.asm"
-	include		"ops/fsub.asm"
 	include		"ops/fsqrt.asm"
 	include		"ops/ftentox.asm"
 	include		"ops/ftan.asm"

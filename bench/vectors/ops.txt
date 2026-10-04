@@ -77,3 +77,12 @@ fsqrt    0.0001   -
 fsqrt    123456789.123    -
 fsqrt    1.5e-10  -
 fsqrt    1.5e10   -
+fetox    -3.66    -
+fetox    15.0     -
+fetox    -15.0    -
+fetox    0.0005   -
+fetox    inf      -
+fetox    -inf     -
+fsub     2.0      5.0
+fsub     -2.0     -5.0
+fadd     2.0      5.0

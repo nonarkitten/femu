@@ -215,7 +215,40 @@ vectors spanning `1.5e-10` to `1.5e10`. Slower than the old library call
 expected and not the point — zero AmigaOS dependency for this op now, at a
 real, fully-known cost instead of an excluded one.
 
-Next up in this row: `fetox`/`flogn` (foundational — unlocks `ftwotox`/
+`fetox`'s general case is also done now (see `README.md`'s `#10` row for
+the full writeup): `NativeFexp` does standard range reduction
+(`x = k*ln(2)+r`) plus a 16-term Horner-evaluated Taylor polynomial for
+`e^r`, then `e^x = e^r * 2^k` via an exponent bump. Landing it surfaced
+and fixed two real, pre-existing bugs that had nothing to do with `fetox`
+specifically:
+
+1. **`d7` is `INSTRUCTION`** (`src/utils/constants.asm`: `INSTRUCTION
+   equr d7`) — the live decoded opcode word every handler's
+   `GETREGISTER` reads *after* returning. A native-math loop counter
+   parked in `d7` (both the Horner loop here and `NativeFsqrt`'s
+   pre-existing iteration counter) corrupts that opcode word, so
+   `GETREGISTER` decodes the *wrong* destination FPn and the correct
+   result gets written there instead of to the real destination —
+   which, for the existing `fp0,fp0` test vectors, looked exactly like
+   "the op silently didn't run" rather than "wrong answer". Fixed by
+   moving both loop counters into memory. If you write another native-
+   math routine with a loop in it: **never put the counter in `d7`.**
+2. **`FE_FADD` (shared by `fadd` *and* `fsub`) silently discarded the
+   result's sign** for any case reaching `MainBody`'s `DiffSigns`/
+   `SameSign` paths — `bfins d6,d0{0:1}` only inserts `d6`'s bit 0, but
+   the sign there is built as `d6 = ... & $80000000` (a bit31 value, so
+   bit 0 is always 0). Every add/sub whose true result is negative came
+   out positive. Never caught before because no existing vector
+   exercised that path with a negative result. Fixed (`or.l d6,d0`,
+   matching `FE_FMUL`'s own correct convention). Two new `fsub`/one new
+   `fadd` vector now pin this.
+
+Also bumped the bench harness's vector/opcode buffers from a hardcoded 64
+to 128 (`bench/src/harness.c`) — they silently truncated past 64 with no
+error, so the 5 new `fetox` vectors added past that point weren't
+actually running even though the suite reported all-MATCH.
+
+Next up in this row: `flogn` (foundational — unlocks `ftwotox`/
 `ftentox`'s general case, `flog2`/`flog10`, and `fsinh`/`fcosh`/`ftanh` as
 cheap derivations once native), then `fsin`/`fcos` (foundational for
 `ftan`/`fsincos`), then `fatan` (foundational for `fasin`/`facos` via

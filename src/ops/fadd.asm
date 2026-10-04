@@ -154,10 +154,17 @@ FE_FADD macro
 	; Construct result word0: move the (possibly NORMALIZE-adjusted)
 	; exponent from its right-justified working position back to bits
 	; 30-16 (the shift naturally discards the stale operand sign still
-	; sitting in bit31), then set the real sign computed above (d6).
+	; sitting in bit31, leaving bit31 clear), then OR in the real sign
+	; computed above (d6, already 0 or $80000000 -- NOT bfins, which
+	; would insert only d6's bit0: every sign-producing path above
+	; builds d6 with "and.l #$80000000,d6", so its bit0 is always 0
+	; regardless of the actual sign, and `bfins d6,d0{0:1}` silently
+	; forced every result positive. Caught via a bench vector testing
+	; fsub/FE_FADD with a negative result -- nothing in the existing
+	; suite exercised MainBody's DiffSigns/SameSign paths with one).
 	lsl.l			#8,d0
 	lsl.l			#8,d0
-	bfins			d6,d0{0:1}
+	or.l			d6,d0
 
 	; Done
 	.Done:

@@ -28,14 +28,28 @@ FetoxHandler
 	bra.w			.FastDone
 	.NotZero:
 
-	jsr				InternalToDouble
-
-	; Emulate instruction
-	movea.l			MathIeeeDoubTransBase,a6
-	jsr				_LVOIEEEDPExp(a6)
-
-	; Write results
-	jsr				DoubleToInternal
+	; Native e^x (checklist #10): no library call anywhere in this op
+	; any more. +Inf -> +Inf (self-identical, same trick as the zero
+	; fast path above); -Inf -> +0; NaN passes through unchanged
+	; (discriminated the same way SETCC itself does: exponent all-ones
+	; with a mantissa that IS the clean explicit-bit-only pattern is
+	; Infinity, anything else with that exponent is NaN). Everything
+	; else goes through NativeFexp (src/utils/nativemath.asm).
+	bfextu			d0{1:15},d6
+	cmp.l			#32767,d6
+	bne.s			.Finite
+	cmp.l			#$80000000,d1
+	bne.w			.FastDone
+	tst.l			d2
+	bne.w			.FastDone
+	btst			#31,d0
+	beq.w			.FastDone
+	moveq			#0,d0
+	moveq			#0,d1
+	moveq			#0,d2
+	bra.w			.FastDone
+	.Finite:
+	jsr				NativeFexp
 	.FastDone:
 	GETREGISTER		d5
 	MOVEDNTOFPN		d5,d0,d1,d2
