@@ -146,10 +146,34 @@ could plausibly use its own smaller, fixed-shape frame), so `#7` is
 effectively blocked on `#8` landing first, not just on `0`/`6`. Full
 writeup in `README.md`'s `#7` row; the finding is also recorded as a
 comment above `PREHANDLEEXCEPTION` in `src/utils/fhandler.asm` so a future
-session doesn't redo the audit. `#8` (EA-decode fast path, deps `0`) is
-now the natural next row if `#7` is ever revisited; `#9` (transcendental
-fast paths) and `#10` (native transcendentals, deps `#1`/`#4` done) remain
-fair game too, and `#11` (fmovem bulk register move fix) is untouched.
+session doesn't redo the audit.
+
+`#8` (EA-decode fast path) is done: `GetEaValue` (`src/utils/ea.asm`)
+resolves `Dn`/`(An)`/`(An)+`/`-(An)`/`(d16,An)` addresses inline, once,
+instead of each of its 7 data-length format handlers doing its own nested
+`jsr GetEa` — a real win, not a wash, on every fast-pathed mode (`fmove.x
+(a0),fp0` 736→719, `fmove.d (a0),fp0` 881→864, `(a0)+`/`-(a0)` 921→916/
+923→918, `(4,a0)` 924→907, Dn-direct word/byte/long 936→921/926→909/
+932→905 — see `README.md`'s `#8` row for the full writeup). Caught one
+real mistake by measuring rather than trusting the logic: the first
+version dispatched the 5 modes via a linear `cmp`/`bcc` chain, which made
+`(An)+`/`-(An)`/`(d16,An)` *slower* than before (each pays for every
+earlier mode's comparison in the chain) — fixed by switching to a small
+jump table (O(1) to reach any mode, matching `GetEa`'s own dispatch
+shape), which is what actually delivers the uniform win above. **Does
+NOT unblock `#7`**, worth being explicit about since it's the obvious
+next question: `#8`'s fast path still reaches into the *same* fixed-
+offset `OSTACKAN`/`OSTACKDN` frame (`GETEAREGISTER`'s bitfield extraction
++ a runtime register-number index, unchanged) rather than introducing
+the smaller, fixed-shape frame `#7`'s writeup speculated might appear —
+that would be a different, larger change (the EA fast path would need
+its own dedicated register set, not just inline the same lookup), not
+something this row's scope included. `#7` remains ❌/blocked until
+something actually does that.
+
+`#9` (transcendental fast paths) and `#10` (native transcendentals, deps
+`#1`/`#4` done) are fair game next; `#11` (fmovem bulk register move fix)
+is untouched.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

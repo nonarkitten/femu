@@ -27,7 +27,7 @@ ASMFLAGSMOT  = -Fbin
 FEMU_SRCS := $(shell find $(SRC) -name '*.asm')
 
 .PHONY: all run clean vasm-tool
-all: $(BUILD)/femu-bench $(BUILD)/femu020.bin $(BUILD)/femu020m.bin $(BUILD)/ops.bin $(BUILD)/fmove_probe.bin $(BUILD)/fsmul_probe.bin $(BUILD)/chain_probe.bin
+all: $(BUILD)/femu-bench $(BUILD)/femu020.bin $(BUILD)/femu020m.bin $(BUILD)/ops.bin $(BUILD)/fmove_probe.bin $(BUILD)/fsmul_probe.bin $(BUILD)/ea_fastpath_probe.bin $(BUILD)/chain_probe.bin
 
 run: all
 	cd $(CURDIR) && ./$(BUILD)/femu-bench
@@ -68,6 +68,9 @@ $(BUILD)/fsmul_probe.bin: src/fsmul_probe.asm $(VASM)
 
 $(BUILD)/chain_probe.bin: src/chain_probe.asm $(VASM)
 	$(VASM) $(ASMFLAGSMOT) -m68020 -m68881 -o $@ src/chain_probe.asm
+
+$(BUILD)/ea_fastpath_probe.bin: src/ea_fastpath_probe.asm $(VASM)
+	$(VASM) $(ASMFLAGSMOT) -m68020 -m68881 -o $@ src/ea_fastpath_probe.asm
 
 # --- Musashi: generate its opcode tables, then compile the core ---------
 $(BUILD)/m68kmake: $(MUSASHI_DIR)/m68kmake.c
