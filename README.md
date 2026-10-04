@@ -96,6 +96,7 @@ result) in [Checklist details](#checklist-details) below.
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 Not started | `perf/10-native-transcendentals` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
+| [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
 ### Checklist details
 
@@ -715,6 +716,32 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 - **Status:** 🔲 Not started
 - **Branch:** `perf/11-fmovem-fix`
 - **Result:** —
+
+<a id="row-12"></a>
+#### #12 — Relaxed-precision internal format
+
+- **Idea:** Keep the 80-bit (`RegFpn`) layout from `#4` — same byte shape,
+  same `fmove.x`/`fmovem.x` straight-copy win — but force the low 16 or
+  32 mantissa bits to a fixed pattern (0 on round, 1 on truncate) and do
+  the arithmetic itself at the resulting effective width (48 or 32
+  significant bits) instead of the full 64, across every op, not just
+  the opcode-forced-single case `#5` already covers. The bet: narrower
+  mantissas mean narrower `MUL64`/`DIV64` work (and `ALIGNEXPONENT`/
+  `NORMALIZE`) for *all* arithmetic, not only when FPCR or the opcode
+  says single — closer to what `#4`'s own design doc originally hoped
+  `#4` itself would deliver before measurement showed otherwise.
+- **Depends on:** 4
+- **Status:** 🔲 Not started
+- **Branch:** `perf/12-relaxed-precision`
+- **Result:** — Suggested by the user after `#5`/`#8`/`#9` landed; not
+  started. Worth noting up front for whoever picks this up: this is a
+  real, opt-in *relaxation* in the `CLAUDE.md` sense (the same tradeoff
+  `#5` already accepted for the single-precision fast path specifically)
+  — it must still fall through to a correct path when precision actually
+  matters, never silently round wrong, and the checklist row should
+  record where the line is drawn (e.g. does 48-bit mode replace `#4`'s
+  64-bit default outright, or sit alongside it as a third FPCR-style
+  mode next to extended/single/double?).
 
 See `ISSUES.md` for the original author's per-opcode issue notes — several
 rows above trace directly back to entries there (e.g. "calls
