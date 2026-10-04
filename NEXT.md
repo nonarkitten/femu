@@ -285,12 +285,33 @@ fetox's verbatim. One pre-existing vector, `fcosh(9.43)`, shows a real
 80-digit exact `Decimal` value, femu's answer is the one actually
 closer to the truth -- the host libm has the error here, not us.
 
-Next up in this row: `fsin`/`fcos` (foundational for `ftan`/`fsincos`)
-and `fatan` (foundational for `fasin`/`facos` via
-`asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too) are the
-two pieces left that need a real new algorithm rather than a
-derivation. `#11` (fmovem bulk register move fix) remains untouched
-and fair game any time.
+`fsin`/`fcos` are also done now (see `README.md`'s `#10` row for the
+full writeup) -- the first of the two pieces in this row needing a real
+new algorithm, not a derivation. Standard quadrant range reduction
+(`x = n*(pi/2)+r`, `n = round(x*2/pi)`, `|r|<=pi/4`) then separate
+11-term Horner-evaluated Maclaurin polynomials for `sin(r)`/`cos(r)`,
+then the usual quadrant table turns `(sin(r),cos(r))` back into
+`(sin(x),cos(x))` -- one shared `NativeFsincos` computes both, since
+`fsin`/`fcos` (and the future `fsincos`) all need the identical
+reduction.
+
+Caught a real bug in this row's own tooling before it shipped: the
+Python script generating the Maclaurin coefficients' extended-hex
+constants forgot the alternating `+,-,+,-,...` sign a sin/cos Taylor
+series needs -- every other series in `#10` (`e^x`, `atanh`) happens
+to have all-positive coefficients, so there was nothing to copy the
+mistake from. Found by hand-deriving the expected polynomial value at
+each partial Horner step in Python and comparing against a register-
+level trace of the assembly; agreed exactly through the first term and
+only diverged once a should-be-negative coefficient's wrong sign
+accumulated, pointing at the constants rather than the loop. Fixed by
+regenerating all 22 `SinC*`/`CosC*` constants with the sign restored.
+
+Next up in this row: `fatan` (foundational for `fasin`/`facos` via
+`asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too) is the
+one piece left that needs a real new algorithm. `ftan`/`fsincos` are
+now cheap derivations now that `fsin`/`fcos` are native. `#11` (fmovem
+bulk register move fix) remains untouched and fair game any time.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

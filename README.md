@@ -94,7 +94,7 @@ result) in [Checklist details](#checklist-details) below.
 | [7](#row-7) | ~~Trim the trap prologue/epilogue (save only what's clobbered)~~ | 0, 6 | ❌ Not viable as scoped | `perf/07-lean-trap-frame` |
 | [8](#row-8) | EA-decode fast path for the common addressing modes | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
-| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (7/14 + `fsqrt` done — see row) | `claude/keen-mendel-3hb6vs` |
+| [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | 🔲 In progress (9/14 + `fsqrt` done — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | 🔲 Not started | `perf/11-fmovem-fix` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
 
@@ -708,11 +708,12 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 - **Depends on:** 1, 4
 - **Status:** 🔲 In progress. Done: `fsqrt` (found along the way, not
   one of the row's original 14), `fetox`, `flogn`, `ftwotox`,
-  `ftentox`, `flog2`, `flog10`, `fsinh`, `fcosh`, `ftanh`. Left:
-  `fsin`/`fcos`/`fsincos`/`ftan`/`fatan`/`fasin`/`facos` — several of
-  those are themselves cheap derivations once `fsin`/`fcos`/`fatan`
-  land, the same way `ftwotox`/`ftentox`/`flog2`/`flog10` turned out
-  to be once `fetox`/`flogn` did.
+  `ftentox`, `flog2`, `flog10`, `fsinh`, `fcosh`, `ftanh`, `fsin`,
+  `fcos`. Left: `fsincos`/`ftan`/`fatan`/`fasin`/`facos` — `fsincos`/
+  `ftan` are now cheap derivations once `fsin`/`fcos` landed, the
+  same way `ftwotox`/`ftentox`/`flog2`/`flog10` turned out to be once
+  `fetox`/`flogn` did; `fatan` is the one piece left needing a real
+  new algorithm, and `fasin`/`facos` derive from it once it lands.
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** This row is far bigger than any other on the checklist
   (14 functions named, several needing a real numerical algorithm, not
@@ -972,11 +973,70 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   -- the host libm itself has the 1-ULP error here, not femu. Every
   other vector and probe in the suite remains bit-exact.
 
-  **Still to do in this row:** `fsin`/`fcos` (foundational for `ftan`/
-  `fsincos`) and `fatan` (foundational for `fasin`/`facos` via
-  `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is native too) are
-  the two pieces left that need a real new algorithm rather than a
-  derivation.
+  **`fsin`/`fcos` — done.** The first of the two pieces in this row
+  that needed a real new algorithm rather than a derivation. Standard
+  quadrant range reduction (`x = n*(pi/2) + r`, `n = round(x*2/pi)`,
+  `|r| <= pi/4`) then separate 11-term Horner-evaluated Maclaurin
+  polynomials for `sin(r)`/`cos(r)`, then the usual sin/cos-of-sum
+  quadrant table (`n&3` -- a power-of-two mask, not a general mod,
+  gives the correct 0..3 result even for negative `n`, the same trick
+  `NativeFsqrt`'s own parity split uses) turns `(sin(r),cos(r))` back
+  into `(sin(x),cos(x))`. One shared `NativeFsincos` routine
+  (`src/utils/nativemath.asm`) computes both at once -- `fsin.asm`/
+  `fcos.asm` (and the future `fsincos.asm`) all need the exact same
+  reduction, and a second caller needing it was never speculative,
+  it showed up immediately. Both series' 11 terms were verified in
+  Python (exact `Decimal` arithmetic against an independently-derived
+  high-precision pi, 50000+ random `|r|<=pi/4` samples) to bring their
+  own truncation error to a small fraction of a ULP. The range
+  reduction itself uses a single 64-bit-mantissa `pi/2` constant, not
+  a multi-word one -- verified in Python to stay double-accurate for
+  `|x|` up to a few thousand (same character as any "plain" sin/cos
+  without Payne-Hanek-style huge-argument reduction); nothing in this
+  codebase's test range comes close to that, and arbitrary-magnitude
+  accuracy is out of scope for a row about portability, not precision
+  records.
+
+  Found (and fixed) a real bug in its own constant-generation script
+  before it ever reached a test: the Python script that derived the
+  Maclaurin coefficients' extended-hex constants forgot the
+  alternating `+,-,+,-,...` sign a Taylor series for `sin`/`cos`
+  needs (unlike every other series in this row -- `e^x`'s and
+  `atanh`'s both have all-positive coefficients, so this specific
+  mistake had nothing to copy from). Every coefficient came out a
+  clean positive magnitude instead, and the resulting `sin`/`cos`
+  were simply wrong for any non-trivial reduced angle. Caught by
+  hand-deriving the expected polynomial value in Python at each
+  partial Horner step and comparing against a register-level trace of
+  the assembly -- the values agreed exactly through the *first*
+  Horner term (`CosC10*t+CosC9`) and only diverged once a `C9`-class
+  (odd-index, should-be-negative) coefficient's wrong sign accumulated
+  through more terms, which is what pointed at the constants
+  themselves rather than the loop logic. Fixed by regenerating all 22
+  `SinC*`/`CosC*` constants with the sign restored.
+
+  Zero (self-identical for `fsin`, constructed as `1.0` for `fcos`,
+  matching `fsinh`/`fcosh`'s own odd/even distinction) and Inf (NaN
+  for both -- unlike every *other* Inf case in this row, `sin`/`cos`
+  of infinity is genuinely undefined, the function keeps oscillating
+  forever rather than approaching any limit) are discriminated the
+  same way the rest of `#10` already does; an actual NaN passes
+  through unchanged.
+
+  **Measured** (`bench/`, register-direct, 16 new vectors: all four
+  quadrants via both a positive and negative operand, a larger-
+  magnitude operand needing several periods of reduction, zero, and
+  `+Inf`/`-Inf` for both ops): every case `MATCH`es the host `sin()`/
+  `cos()` bit-exactly, NaN cases included. Every other vector and
+  probe in the suite remains bit-exact (only the already-explained
+  `fcosh(9.43)` case persists).
+
+  **Still to do in this row:** `fatan` (foundational for `fasin`/
+  `facos` via `asin(x)=atan(x/sqrt(1-x^2))`, now that `fsqrt` is
+  native too) is the one piece left that needs a real new algorithm.
+  `ftan`/`fsincos` are now cheap derivations (`tan(x)=sin(x)/cos(x)`;
+  `fsincos` can call `NativeFsincos` directly and keep both results)
+  now that `fsin`/`fcos` are native.
 
 <a id="row-11"></a>
 #### #11 — Fix `fmovem` bulk register move

@@ -122,3 +122,19 @@
 	ftanh.x		fp0,fp0
 	ftanh.x		fp0,fp0
 	ftanh.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fsin.x		fp0,fp0
+	fcos.x		fp0,fp0
+	fcos.x		fp0,fp0
+	fcos.x		fp0,fp0
+	fcos.x		fp0,fp0
+	fcos.x		fp0,fp0
+	fcos.x		fp0,fp0
+	fcos.x		fp0,fp0
+	fcos.x		fp0,fp0
