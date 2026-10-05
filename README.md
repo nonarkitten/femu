@@ -97,7 +97,7 @@ result) in [Checklist details](#checklist-details) below.
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | ✅ Done (14/14 + `fsqrt` — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
-| [13](#row-13) | CORDIC (or a shorter minimax series) for `#10`'s native transcendentals, to cut the per-hop chaining cost `#10` measured | 10 | 🔲 In progress (`fsin`/`fcos`/`ftan`/`fsincos` → 8-term minimax, ~21-26% faster; CORDIC tried, measured 2-3x slower, reverted — see row) | `claude/keen-mendel-3hb6vs` |
+| [13](#row-13) | CORDIC (or a shorter minimax series) for `#10`'s native transcendentals, to cut the per-hop chaining cost `#10` measured | 10 | ✅ Done (minimax across the whole `#10` family; CORDIC tried, measured 2-3x slower, reverted — see row) | `claude/keen-mendel-3hb6vs` |
 
 ### Checklist details
 
@@ -1268,36 +1268,43 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   cutting the chain length is the actual goal, not swapping one
   polynomial for another of the same shape.
 - **Depends on:** 10
-- **Status:** 🔲 In progress. `fsin`/`fcos`/`ftan`/`fsincos` now run an
-  8-term minimax series instead of the original 11-term Taylor series
-  (~21-26% faster). `fatan` now runs a 13-term minimax series instead
-  of the original 25-term Gregory series (~32-46% faster). `fasin`/
-  `facos` are now fully standalone minimax too — the `fatan`+`fsqrt`
-  derivation chain is gone entirely, per the user's explicit "no
-  derivations" direction — and came out *another* ~31% faster on top
-  of what inheriting `fatan`'s win alone would have given (~45% faster
-  than the original `#10` chain overall). CORDIC was tried first (per
-  this row's own original idea), measured 2-3x *slower*, and reverted
-  — kept as a documented dead end (`src/utils/cordic.asm`,
-  unreferenced by any op) rather than deleted. `fetox` now runs a
-  13-term minimax series instead of the original 16-term Taylor
-  series (~17% faster); `flogn` now runs a 9-term minimax series
-  instead of the original 13-term atanh series (~15-21% faster).
-  `fsinh`/`fcosh` now call `NativeFexp` once instead of twice (`e^-x`
-  via a cheap `NativeFdiv` reciprocal instead of a second full
-  exponential), and `ftanh` calls it once via a ratio identity that
-  needs no division-shaped step beyond the one it already had
-  (~30-40% faster across all three). Found and fixed a real, separate
-  bug while verifying this: the bench harness's vector buffer was
-  still capped at 128 while `vectors/ops.txt` had quietly grown to
-  150 real rows, silently dropping the last 22 (including several of
-  `fsinh`/`fcosh`/`ftanh`'s own Inf/-Inf vectors) — the lockstep check
-  passed anyway because both sides truncated equally. Still to do:
-  `ftwotox`/`ftentox`/`flog2`/`flog10` haven't been given their own
-  standalone treatment yet — they currently just inherit `fetox`'s/
-  `flogn`'s speedup for free (already a single-call shape, same as
-  `facos`'s own `pi/2-asin(x)` glue, so it's not clear they need
-  further de-deriving the way `fsinh`/`fcosh`/`ftanh` did).
+- **Status:** ✅ Done. Every function in `#10`'s original family has
+  been checked for the chaining cost this row set out to cut, and
+  either rewritten or confirmed already fine:
+  - `fsin`/`fcos`/`ftan`/`fsincos`: 8-term minimax replaces the
+    original 11-term Taylor series (~21-26% faster).
+  - `fatan`: 13-term minimax replaces the original 25-term Gregory
+    series (~32-46% faster).
+  - `fasin`/`facos`: fully standalone minimax, the `fatan`+`fsqrt`
+    derivation chain gone entirely per the user's explicit "no
+    derivations" direction (~45% faster than the original `#10`
+    chain overall).
+  - `fetox`: 13-term minimax replaces the original 16-term Taylor
+    series (~17% faster).
+  - `flogn`: 9-term minimax replaces the original 13-term atanh
+    series (~15-21% faster).
+  - `fsinh`/`fcosh`/`ftanh`: one `NativeFexp` call instead of two
+    (~30-40% faster across all three).
+  - `ftwotox`/`ftentox`/`flog2`/`flog10`: checked and left alone —
+    each already makes exactly one call to the shared kernel plus one
+    cheap multiply, the same shape `facos`'s own `pi/2-asin(x)` glue
+    uses, so there was no further chaining to cut.
+  - `fsqrt`: left alone — already standalone (Newton-Raphson, no
+    library call, no chain) since `#10` itself, never part of the
+    problem this row measured.
+
+  CORDIC was tried first (per this row's own original idea, for the
+  circular sin/cos/tan family), measured 2-3x *slower* than the
+  Horner series it would have replaced, and reverted — kept as a
+  documented dead end (`src/utils/cordic.asm`, unreferenced by any
+  op) rather than deleted. Minimax carried the rest of the row.
+
+  A real, separate bug was found and fixed while verifying the
+  `fsinh`/`fcosh`/`ftanh` change: the bench harness's vector buffer
+  was still capped at 128 while `vectors/ops.txt` had quietly grown
+  to 150 real rows, silently dropping the last 22 (including several
+  of `fsinh`/`fcosh`/`ftanh`'s own Inf/`-Inf` vectors) — the lockstep
+  check passed anyway because both sides truncated equally.
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** Suggested by the user right after `#10` closed, having
   asked for and gotten the real chaining-cost numbers above (not a
@@ -1512,15 +1519,19 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   thanks to the buffer-cap fix, all `MATCH`). Every vector `MATCH`es
   bit-exactly; no regressions elsewhere.
 
-  **Still to do in this row:** `ftwotox`/`ftentox`/`flog2`/`flog10`
-  all still derive from `NativeFexp`/`NativeFlogn` and inherited the
-  `fetox`/`flogn` speedup for free — but unlike `fsinh`/`fcosh`/
-  `ftanh`, each of those already only makes ONE call to the shared
-  kernel plus one cheap multiply (`b^x=e^(x*ln(b))`,
-  `log_b(x)=ln(x)/ln(b)`), the same shape `facos`'s own
-  `pi/2-asin(x)` glue already uses — so it's not obvious there's
-  further chaining left to cut there, unlike the double-call pattern
-  `fsinh`/`fcosh`/`ftanh` had.
+  **Checked, nothing left to do: `ftwotox`/`ftentox`/`flog2`/
+  `flog10`.** All four still derive from `NativeFexp`/`NativeFlogn`
+  and inherited the `fetox`/`flogn` speedup for free, but unlike
+  `fsinh`/`fcosh`/`ftanh`, each already makes only ONE call to the
+  shared kernel plus one cheap multiply (`b^x=e^(x*ln(b))`,
+  `log_b(x)=ln(x)/ln(b)`) — the same shape `facos`'s own
+  `pi/2-asin(x)` glue uses. There was no double-call pattern to cut
+  here the way `fsinh`/`fcosh`/`ftanh` had, so these are left as-is.
+
+  **This closes out checklist `#13`.** Every function `#10` originally
+  named has either been rewritten to a shorter minimax series, de-
+  derived to a single kernel call, or checked and confirmed to need
+  neither.
 
 See `ISSUES.md` for the original author's per-opcode issue notes — several
 rows above trace directly back to entries there (e.g. "calls
