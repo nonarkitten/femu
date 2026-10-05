@@ -840,17 +840,21 @@ NativeFsincos
 	move.l			d1,SincosT+4
 	move.l			d2,SincosT+8
 
-	; cos(r): result = CosC10; for n=9 downto 0, result := result*t +
+	; cos(r): result = CosC7; for n=6 downto 0, result := result*t +
 	; CosCn. Same address-increment trick as NativeFexp's own Horner
 	; loop (see there for why the constants are declared highest-
-	; term-first in source, lowest-address-first in memory).
-	lea.l			CosC10,a0
+	; term-first in source, lowest-address-first in memory). 8-term
+	; minimax (checklist #13), not the original 11-term Taylor/
+	; Maclaurin series -- see cordic.asm's own header comment for why
+	; CORDIC itself didn't pan out, and this file's own header comment
+	; block above NativeFsincos for the minimax writeup.
+	lea.l			CosC7,a0
 	movem.l			(a0),d0/d1/d2
 	move.l			d0,SincosCosR
 	move.l			d1,SincosCosR+4
 	move.l			d2,SincosCosR+8
-	lea.l			CosC9,a0
-	move.l			#9,SincosIterCount
+	lea.l			CosC6,a0
+	move.l			#6,SincosIterCount
 	.CosLoop:
 	move.l			SincosCosR,d0
 	move.l			SincosCosR+4,d1
@@ -874,14 +878,14 @@ NativeFsincos
 	subq.l			#1,SincosIterCount
 	bpl.w			.CosLoop
 
-	; sin(r) = r * (SinC10 Horner-evaluated the same way)
-	lea.l			SinC10,a0
+	; sin(r) = r * (SinC7 Horner-evaluated the same way, 8-term minimax)
+	lea.l			SinC7,a0
 	movem.l			(a0),d0/d1/d2
 	move.l			d0,SincosSinR
 	move.l			d1,SincosSinR+4
 	move.l			d2,SincosSinR+8
-	lea.l			SinC9,a0
-	move.l			#9,SincosIterCount
+	lea.l			SinC6,a0
+	move.l			#6,SincosIterCount
 	.SinLoop:
 	move.l			SincosSinR,d0
 	move.l			SincosSinR+4,d1
@@ -973,28 +977,35 @@ SincosT			dc.l	0,0,0
 SincosSinR		dc.l	0,0,0
 SincosCosR		dc.l	0,0,0
 SincosIterCount	dc.l	0
-SinC10		dc.l	$3fbd0000,$b8dc77b6,$e7ab8c5f	; +1/21!
-SinC9		dc.l	$bfc60000,$97a4da34,$0a0ab926	; -1/19!
-SinC8		dc.l	$3fce0000,$ca963b81,$856a5359	; +1/17!
-SinC7		dc.l	$bfd60000,$d73f9f39,$9dc0f88f	; -1/15!
-SinC6		dc.l	$3fde0000,$b092309d,$43684be5	; +1/13!
-SinC5		dc.l	$bfe50000,$d7322b3f,$aa271c7f	; -1/11!
-SinC4		dc.l	$3fec0000,$b8ef1d2a,$b6399c7d	; +1/9!
-SinC3		dc.l	$bff20000,$d00d00d0,$0d00d00d	; -1/7!
-SinC2		dc.l	$3ff80000,$88888888,$88888889	; +1/5!
-SinC1		dc.l	$bffc0000,$aaaaaaaa,$aaaaaaab	; -1/3!
-SinC0		dc.l	$3fff0000,$80000000,$00000000	; +1/1!
-CosC10		dc.l	$3fc10000,$f2a15d20,$1011283d	; +1/20!
-CosC9		dc.l	$bfca0000,$b413c31d,$cbecbbde	; -1/18!
-CosC8		dc.l	$3fd20000,$d73f9f39,$9dc0f88f	; +1/16!
-CosC7		dc.l	$bfda0000,$c9cba546,$03e4e906	; -1/14!
-CosC6		dc.l	$3fe20000,$8f76c77f,$c6c4bdaa	; +1/12!
-CosC5		dc.l	$bfe90000,$93f27dbb,$c4fae397	; -1/10!
-CosC4		dc.l	$3fef0000,$d00d00d0,$0d00d00d	; +1/8!
-CosC3		dc.l	$bff50000,$b60b60b6,$0b60b60b	; -1/6!
-CosC2		dc.l	$3ffa0000,$aaaaaaaa,$aaaaaaab	; +1/4!
-CosC1		dc.l	$bffe0000,$80000000,$00000000	; -1/2!
-CosC0		dc.l	$3fff0000,$80000000,$00000000	; +1/0!
+; 8-term minimax (checklist #13, Remez exchange in Python against an
+; exact-Decimal reference, 60+ digits of precision) replaces the
+; original 11-term Taylor/Maclaurin series -- the whole interval is
+; [0,(pi/4)^2] (t=r^2), narrow and symmetric enough that Chebyshev-
+; economizing the Taylor series ALREADY lands within a few percent of
+; the true minimax error (cross-checked: a full Remez run gave the
+; same term count and matched the economized error to 4 significant
+; figures), so minimax genuinely saves 3 terms here, not an illusion
+; from a looser tolerance. Verified against dec_sin/dec_cos at 60
+; digits, 20000+ random |x| up to 1000 plus the r=0/r=+-pi/4
+; boundary cases, before writing any assembly -- worst case ~0.3 ULP
+; of this format's 64-bit mantissa, comfortably inside the margin
+; #10's own 11-term series used.
+SinC7		dc.l	$bfd60000,$d54dec22,$efc09046	; -minimax c7
+SinC6		dc.l	$3fde0000,$b0903e76,$77620912	; +minimax c6
+SinC5		dc.l	$bfe50000,$d7322938,$09aac142	; -minimax c5
+SinC4		dc.l	$3fec0000,$b8ef1d29,$89de95d7	; +minimax c4
+SinC3		dc.l	$bff20000,$d00d00d0,$0c443bee	; -minimax c3
+SinC2		dc.l	$3ff80000,$88888888,$88884e63	; +minimax c2
+SinC1		dc.l	$bffc0000,$aaaaaaaa,$aaaaaa8f	; -minimax c1
+SinC0		dc.l	$3fff0000,$80000000,$00000000	; +minimax c0
+CosC7		dc.l	$bfda0000,$c7bb1c07,$ddb67542	; -minimax c7
+CosC6		dc.l	$3fe20000,$8f74b693,$20d77422	; +minimax c6
+CosC5		dc.l	$bfe90000,$93f27b94,$17a339db	; -minimax c5
+CosC4		dc.l	$3fef0000,$d00d00cd,$8f46c379	; +minimax c4
+CosC3		dc.l	$bff50000,$b60b60b6,$09d05469	; -minimax c3
+CosC2		dc.l	$3ffa0000,$aaaaaaaa,$aaa9b3c4	; +minimax c2
+CosC1		dc.l	$bffd0000,$ffffffff,$ffffff18	; -minimax c1
+CosC0		dc.l	$3ffe0000,$ffffffff,$ffffffff	; +minimax c0
 
 
 ;

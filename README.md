@@ -97,7 +97,7 @@ result) in [Checklist details](#checklist-details) below.
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | ✅ Done (14/14 + `fsqrt` — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
 | [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
-| [13](#row-13) | CORDIC (or a shorter minimax series) for `#10`'s native transcendentals, to cut the per-hop chaining cost `#10` measured | 10 | 🔲 Not started | `perf/13-cordic-transcendentals` |
+| [13](#row-13) | CORDIC (or a shorter minimax series) for `#10`'s native transcendentals, to cut the per-hop chaining cost `#10` measured | 10 | 🔲 In progress (`fsin`/`fcos`/`ftan`/`fsincos` → 8-term minimax, ~21-26% faster; CORDIC tried, measured 2-3x slower, reverted — see row) | `claude/keen-mendel-3hb6vs` |
 
 ### Checklist details
 
@@ -1268,21 +1268,78 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   cutting the chain length is the actual goal, not swapping one
   polynomial for another of the same shape.
 - **Depends on:** 10
-- **Status:** 🔲 Not started
-- **Branch:** `perf/13-cordic-transcendentals`
-- **Result:** — Suggested by the user right after `#10` closed, having
+- **Status:** 🔲 In progress. `fsin`/`fcos`/`ftan`/`fsincos` now run an
+  8-term minimax series instead of the original 11-term Taylor series
+  — a real, measured win (~21-26% faster, see below). CORDIC was tried
+  first (per this row's own original idea), measured 2-3x *slower*,
+  and reverted — kept as a documented dead end (`src/utils/cordic.asm`,
+  unreferenced by any op) rather than deleted. Still to do: the rest of
+  the `#10` family (`fatan`/`fasin`/`facos`, `fetox`/`flogn` and
+  everything derived from them) hasn't been looked at yet for either
+  approach.
+- **Branch:** `claude/keen-mendel-3hb6vs`
+- **Result:** Suggested by the user right after `#10` closed, having
   asked for and gotten the real chaining-cost numbers above (not a
   guess). The user also flagged the obvious open question up front:
   whether CORDIC is actually a good fit for a 68000/68020 without
-  hardware barrel-shift-per-cycle — CLAUDE.md's "measure, don't guess"
-  applies here as much as anywhere: verify CORDIC's iteration count and
-  accuracy in Python against this format's 64-bit mantissa (same
-  discipline `#10`'s own series used) *and* bench it against the
-  current Horner-series native code before assuming it's a net win, not
-  just a shift-vs-multiply argument on paper. If CORDIC doesn't pan out,
-  the fallback (a shorter per-function minimax series, same shape as
-  `#10`'s existing tables but skipping the `fatan`/`fetox`/`flogn`
-  detour) is still worth landing on its own.
+  hardware barrel-shift-per-cycle.
+
+  **CORDIC (circular mode, sin/cos/tan/sincos) — tried, reverted.**
+  Built a real circular-rotation CORDIC kernel (`src/utils/cordic.asm`):
+  a pure fixed-point format ("Fixed96", Q1.95, 3 longwords, converting
+  to/from the existing extended format only at the kernel's boundary,
+  same principle as `ExtendedToDouble`/`DoubleToExtended`), 62
+  iterations, verified in Python against an exact Decimal reference
+  (~4 ULP of this format's 64-bit mantissa) before any assembly was
+  written. It ended up fully correct — every `fsin`/`fcos`/`ftan`/
+  `fsincos` bench vector `MATCH`ed bit-exactly — after finding and
+  fixing two real register-lifetime bugs (the shift macro's own
+  `lea.l` clobbers whatever the caller was keeping in `a0`/`d0` across
+  the call; caught by the same "round-trip through entry+exit
+  conversion alone, skip the rotation" diagnostic technique this
+  project has used before). But measured cycles were **2-3x worse**
+  than the Horner series it replaced (`fsin` 13636→41821, `fcos`
+  21668→42207, `ftan` 26570→47067, `fsincos` 21793→42332). Root cause,
+  confirmed against Musashi's own cycle-cost table (`bench/vendor/
+  musashi/m68k_in.c`): `bfextu` on a memory operand costs a flat 15
+  cycles on this 68020 timing model regardless of offset, and each
+  CORDIC iteration needs six of them (three-word extract × two
+  shifts) × 62 iterations — the "trade multiply for shift" premise
+  doesn't hold here because `MUL64` is itself hardware-multiply-
+  assisted, and a plain dynamic-count register shift (`6+2n` cycles,
+  `n`=shift amount) would have been even worse than `bfextu`'s flat
+  rate. Reverted `NativeFsincos`/`femu.asm` back to the `#10` Horner
+  implementation; `cordic.asm` itself is kept, unreferenced, as a
+  real, measured, documented attempt rather than deleted.
+
+  **Minimax (sin/cos/tan/sincos) — done, real win.** A Remez-exchange
+  minimax polynomial needs only **8 terms** where the original Taylor/
+  Maclaurin series needed 11, to clear the same `2^-63` truncation-
+  error target over the same reduced range (`t=r^2`, `t` in
+  `[0,(pi/4)^2]`) — verified in Python (`mpmath`, 50-60 decimal digits)
+  two ways before writing any assembly: first a cheap Chebyshev-
+  economization pass (truncate a high-order Chebyshev fit) as a sanity
+  check, then a full Remez-exchange implementation to get the true
+  minimax coefficients and confirm the term count wasn't a Chebyshev-
+  approximation artifact — the two methods' errors matched to 4
+  significant figures, meaning Taylor's own coefficients were already
+  close to minimax-optimal for this narrow, symmetric interval, and
+  the only real gain is the 3 fewer terms minimax needs to hit the
+  same tolerance. Checked end-to-end (quadrant reduction + 8-term
+  Horner, 20000+ random samples up to `|x|=1000` plus boundary cases)
+  against an exact `Decimal` reference: worst case ~0.3 ULP, same
+  margin `#10`'s own 11-term series used. `SinC10`-`SinC0`/
+  `CosC10`-`CosC0` in `src/utils/nativemath.asm` are now `SinC7`-
+  `SinC0`/`CosC7`-`CosC0`, same Horner-loop shape, just 3 fewer
+  constants and 3 fewer `NativeFmul`+`NativeFadd` pairs per call.
+
+  **Measured** (`bench/`, register-direct, the existing `fsin`/`fcos`/
+  `ftan`/`fsincos` vectors, no new ones needed — same inputs, just a
+  faster correct answer): `fsin` 13636→**10052** (-26%), `fcos`
+  21668→**15965** (-26%), `ftan` 26570→**20895** (-21%), `fsincos`
+  21793→**16090** (-26%). Every vector still `MATCH`es bit-exactly; no
+  regressions elsewhere (only the already-explained, non-bug
+  `fcosh(9.43)` case persists).
 
 See `ISSUES.md` for the original author's per-opcode issue notes — several
 rows above trace directly back to entries there (e.g. "calls

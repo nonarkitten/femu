@@ -406,8 +406,38 @@ Fixed the two existing vectors' expected values and added two new ones
 that actually exercise that path. All 4 fmovem vectors now report `ok`;
 rest of the suite unaffected.
 
-`#13` (CORDIC/shorter-series pass for `#10`'s transcendentals) is the
-only row left on the checklist, not started.
+`#13` (CORDIC/shorter-series pass for `#10`'s transcendentals) is now
+in progress, with a real, measured first result for the sin/cos/tan
+family (see `README.md`'s `#13` row for the full writeup):
+
+- **CORDIC tried first, reverted.** Built a real circular-rotation
+  CORDIC kernel (`src/utils/cordic.asm`, a separate pure fixed-point
+  "Fixed96" format, converting to/from extended only at the kernel's
+  own boundary) for `fsin`/`fcos`/`ftan`/`fsincos`. It came out fully
+  correct (every vector `MATCH`ed, after finding and fixing two real
+  register-lifetime bugs in the shift macro) but 2-3x *slower* than
+  the Horner series it replaced -- `bfextu` on a memory operand costs
+  a flat 15 cycles on this 68020 timing model (confirmed against
+  Musashi's own cycle table) regardless of offset, and each iteration
+  needs six of them x 62 iterations, dwarfing an 11-term Horner
+  series backed by the CPU's real hardware multiply. Reverted
+  `NativeFsincos`/`femu.asm`; `cordic.asm` itself stays in the repo,
+  unreferenced, as a documented, measured dead end rather than being
+  deleted.
+- **Minimax tried next, real win.** A Remez-exchange minimax
+  polynomial needs only 8 terms where the original Taylor series
+  needed 11, for the same `2^-63` error target over the same reduced
+  range -- verified in Python (`mpmath`) two ways (a cheap Chebyshev-
+  economization check, then full Remez) before writing any assembly;
+  both methods agreed to 4 significant figures, meaning the gain is a
+  real 3-fewer-terms result, not a loosened tolerance. Measured:
+  `fsin` 13636->10052 (-26%), `fcos` 21668->15965 (-26%), `ftan`
+  26570->20895 (-21%), `fsincos` 21793->16090 (-26%). Every vector
+  still bit-exact; no regressions elsewhere.
+
+Next up in this row: the rest of the `#10` family (`fatan`/`fasin`/
+`facos`, `fetox`/`flogn` and everything derived from them) hasn't been
+looked at for either approach yet.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed
