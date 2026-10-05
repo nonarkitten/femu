@@ -1282,12 +1282,22 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   unreferenced by any op) rather than deleted. `fetox` now runs a
   13-term minimax series instead of the original 16-term Taylor
   series (~17% faster); `flogn` now runs a 9-term minimax series
-  instead of the original 13-term atanh series (~15-21% faster). Still
-  to do: everything still derived from `fetox`/`flogn` (`fsinh`/
-  `fcosh`/`ftanh`, `ftwotox`/`ftentox`, `flog2`/`flog10`) hasn't been
-  given its own standalone treatment yet — they currently just inherit
-  `fetox`'s/`flogn`'s speedup for free, same as `fasin`/`facos` did
-  from `fatan` before getting their own rewrite.
+  instead of the original 13-term atanh series (~15-21% faster).
+  `fsinh`/`fcosh` now call `NativeFexp` once instead of twice (`e^-x`
+  via a cheap `NativeFdiv` reciprocal instead of a second full
+  exponential), and `ftanh` calls it once via a ratio identity that
+  needs no division-shaped step beyond the one it already had
+  (~30-40% faster across all three). Found and fixed a real, separate
+  bug while verifying this: the bench harness's vector buffer was
+  still capped at 128 while `vectors/ops.txt` had quietly grown to
+  150 real rows, silently dropping the last 22 (including several of
+  `fsinh`/`fcosh`/`ftanh`'s own Inf/-Inf vectors) — the lockstep check
+  passed anyway because both sides truncated equally. Still to do:
+  `ftwotox`/`ftentox`/`flog2`/`flog10` haven't been given their own
+  standalone treatment yet — they currently just inherit `fetox`'s/
+  `flogn`'s speedup for free (already a single-call shape, same as
+  `facos`'s own `pi/2-asin(x)` glue, so it's not clear they need
+  further de-deriving the way `fsinh`/`fcosh`/`ftanh` did).
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** Suggested by the user right after `#10` closed, having
   asked for and gotten the real chaining-cost numbers above (not a
@@ -1450,11 +1460,67 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   ~7309-20217→**~5757-16676** (-15% to -21%, varying by which range-
   reduction path a given input takes). Every vector `MATCH`es
   bit-exactly; no regressions elsewhere (only the already-explained,
-  non-bug `fcosh(9.43)` case persists). `fsinh`/`fcosh`/`ftanh`/
-  `ftwotox`/`ftentox`/`flog2`/`flog10` all still derive from
-  `NativeFexp`/`NativeFlogn` and inherited this speedup for free —
-  giving each of those its own standalone minimax (same treatment
-  `fasin`/`facos` got) is still open.
+  non-bug `fcosh(9.43)` case persists).
+
+  **`fsinh`/`fcosh`/`ftanh` — one `NativeFexp` call instead of two.**
+  All three used to compute `e^x` AND `e^-x` as two separate full
+  `NativeFexp` calls (range reduction + Horner series each) — exactly
+  the "chain the expensive kernel twice" pattern this row exists to
+  cut, just not through a *different* op this time. `fsinh`/`fcosh`
+  now compute `e^-x` as `1/e^x` via a single `NativeFdiv` reciprocal
+  instead (~5300-5800 cycles, measured, vs. `NativeFexp`'s own
+  ~13000) — same "keep the plain arithmetic primitive, drop the
+  second transcendental" move `fasin`/`facos` already made with
+  `NativeFsqrt`. `ftanh` does even better: multiplying
+  `(e^x-e^-x)/(e^x+e^-x)` top and bottom by `e^x` gives
+  `(e^(2x)-1)/(e^(2x)+1)` — ONE `NativeFexp` call (of `2x`, itself a
+  free exponent bump, not a multiply) and no extra division-shaped
+  step at all beyond the ratio `tanh` already needed. Verified in
+  Python (double precision, 100000 random `|x|<=20`) that the identity
+  matches `math.tanh` to 1 ULP before writing any assembly.
+
+  `e^(2x)` overflows this format's exponent field around `|x|~5678`
+  (half of `e^x`'s own `~11356`, since doubling `x` doubles the
+  exponent needed) — a real regression risk `#10`'s original two-call
+  version never hit (there, `e^x` stayed finite and `e^-x` correctly
+  underflowed to `0` for any `x` in that gap, giving the exactly
+  correct `1.0`). Added an explicit `|x|>30` saturation fast path to
+  `ftanh.asm` instead of relying on that gap never being hit: verified
+  in Python that `tanh(30)` already rounds to exactly `1.0` at this
+  format's 64-bit mantissa precision (`1-tanh(30) ~ e^-60`, far below
+  `2^-64`), so the guard changes nothing observable while keeping the
+  full input range `#10`'s version correctly handled.
+
+  Found and fixed a real, separate bug while verifying all of this:
+  `bench/src/harness.c`'s vector-loading buffers were still capped at
+  128 (bumped there once before, for the exact same reason) while
+  `vectors/ops.txt` had quietly grown to 150 real rows since — the
+  last 22 were being silently dropped (the lockstep row-count check
+  passed anyway, because both `ops.bin`'s `fread` and `load_vectors`'
+  own cap truncated to the *same* 128, hiding the mismatch). That
+  included several of `fsinh`/`fcosh`/`ftanh`'s own Inf/`-Inf`
+  vectors, which had never actually been exercised despite the suite
+  reporting all-`MATCH`. Bumped both buffers (and `load_vectors`'
+  call) to 256, with a comment asking whoever hits this a third time
+  to fix it properly (read the count first, size to match) instead of
+  guessing a bigger constant again.
+
+  **Measured**: `fsinh` 26720-26906→**18622-18677** (~-30%), `fcosh`
+  26880-27042→**18651-18862** (~-30%, the `fcosh(9.43)` non-bug case
+  included), `ftanh` 31967→**19148** (-40%, plus three more vectors —
+  `-5.0`, `+Inf`, `-Inf` — now actually running for the first time
+  thanks to the buffer-cap fix, all `MATCH`). Every vector `MATCH`es
+  bit-exactly; no regressions elsewhere.
+
+  **Still to do in this row:** `ftwotox`/`ftentox`/`flog2`/`flog10`
+  all still derive from `NativeFexp`/`NativeFlogn` and inherited the
+  `fetox`/`flogn` speedup for free — but unlike `fsinh`/`fcosh`/
+  `ftanh`, each of those already only makes ONE call to the shared
+  kernel plus one cheap multiply (`b^x=e^(x*ln(b))`,
+  `log_b(x)=ln(x)/ln(b)`), the same shape `facos`'s own
+  `pi/2-asin(x)` glue already uses — so it's not obvious there's
+  further chaining left to cut there, unlike the double-call pattern
+  `fsinh`/`fcosh`/`ftanh` had.
 
 See `ISSUES.md` for the original author's per-opcode issue notes — several
 rows above trace directly back to entries there (e.g. "calls

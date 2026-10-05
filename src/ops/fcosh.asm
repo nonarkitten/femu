@@ -50,12 +50,15 @@ FcoshHandler
 	move.l			d1,FcoshEx+4
 	move.l			d2,FcoshEx+8
 
-	; e^-x
-	move.l			FcoshX,d0
-	move.l			FcoshX+4,d1
-	move.l			FcoshX+8,d2
-	bchg			#31,d0
-	jsr				NativeFexp
+	; e^-x = 1/e^x (checklist #13): a reciprocal NativeFdiv instead of
+	; a second full NativeFexp call -- see fsinh.asm's own comment for
+	; the full reasoning and measured savings (~7000+ cycles/call).
+	lea.l			FcoshConstOne,a0
+	movem.l			(a0),d0/d1/d2
+	move.l			FcoshEx,d3
+	move.l			FcoshEx+4,d4
+	move.l			FcoshEx+8,d5
+	jsr				NativeFdiv
 
 	; (e^x + e^-x)/2 -- the /2 is a plain exponent decrement. Always
 	; positive (both e^x and e^-x are), so -- unlike fsinh's version
@@ -88,5 +91,6 @@ FcoshHandler
 	.DEBUGOP:
 	dc.b 			"fcosh %08lx",10,0
 	even
-FcoshX		dc.l	0,0,0
-FcoshEx		dc.l	0,0,0
+FcoshX			dc.l	0,0,0
+FcoshEx			dc.l	0,0,0
+FcoshConstOne	dc.l	$3fff0000,$80000000,$00000000	; 1.0

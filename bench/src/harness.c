@@ -909,17 +909,25 @@ int main(int argc, char **argv)
 {
 	const char *variant_paths[2] = { "build/femu020.bin", "build/femu020m.bin" };
 	const char *variant_names[2] = { "femu.020 (library)", "femu.020m (NOMATHLIB)" };
-	/* 128, not 64: both this buffer and load_vectors' cap below must
+	/* 256, not 128: both this buffer and load_vectors' cap below must
 	 * stay >= vectors/ops.txt's row count, or extra rows past the cap
 	 * are silently dropped (fread stops at sizeof ops, load_vectors
 	 * stops at its `max` -- neither errors) and the lockstep check
 	 * below ends up comparing two equally-truncated counts, hiding the
 	 * drop entirely. Found this by adding checklist #10 fetox vectors
 	 * that never ran: the suite reported all-MATCH while actually
-	 * testing 5 fewer rows than ops.txt/ops.asm listed.
+	 * testing 5 fewer rows than ops.txt/ops.asm listed. Bumped from 64
+	 * to 128 back then; found AGAIN during checklist #13 (ops.txt had
+	 * quietly grown to 150 real rows while this stayed at 128 -- same
+	 * "lockstep check passes because both sides truncate equally"
+	 * trap, this time hiding 22 rows including several of #13's own
+	 * fsinh/fcosh/ftanh Inf/-Inf vectors). If this needs bumping a
+	 * third time, it needs a real fix (read the vector count first,
+	 * size the buffers to match), not another guess at a bigger
+	 * constant.
 	 */
-	unsigned char ops[128 * 4];
-	struct vector vecs[128];
+	unsigned char ops[256 * 4];
+	struct vector vecs[256];
 	int nvec, vi, variant;
 	size_t ops_size;
 	FILE *opsf;
@@ -935,7 +943,7 @@ int main(int argc, char **argv)
 	}
 	fclose(opsf);
 
-	nvec = load_vectors("vectors/ops.txt", vecs, 128);
+	nvec = load_vectors("vectors/ops.txt", vecs, 256);
 	if (nvec != (int)(ops_size / 4)) {
 		fprintf(stderr, "bench: vectors/ops.txt has %d rows but src/ops.asm has %zu -- "
 		                "the two files must be kept in lockstep\n", nvec, ops_size / 4);
