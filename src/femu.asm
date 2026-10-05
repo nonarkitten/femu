@@ -43,6 +43,10 @@
 	include		"ops/fdiv.asm"
 	include		"ops/fmul.asm"
 	include		"ops/fsub.asm"
+	; cordic.asm (checklist #13) must come before nativemath.asm --
+	; NativeFsincos calls into CordicRotateCircular/NativeExtendedTo-
+	; Fixed96/NativeFixed96ToExtended.
+	include		"utils/cordic.asm"
 	include		"utils/nativemath.asm"
 	include		"ops/fabs.asm"
 	include		"ops/facos.asm"
