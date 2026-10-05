@@ -2,9 +2,11 @@
 
 femu is a 68K-assembly F-line exception handler that emulates a 68881/68882
 FPU in software for Amigas that don't have one. This file is the durable
-"how we work here" doc. For *what* we're doing right now, see `README.md`
-(the optimization checklist) and `NEXT.md` (one-paragraph kickoff for a
-fresh session).
+"how we work here" doc. For *what femu is right now*, see `README.md`'s
+"Architecture" section; for *current status / what's next*, see
+`NEXT.md` (one-paragraph kickoff for a fresh session). The workflow below
+still applies to any new performance idea -- it's how every row in
+`README.md`'s Architecture section got there.
 
 ## Prime directive
 
@@ -56,25 +58,29 @@ beats fast (an unmeasured "optimization" is a guess, not a result).
 
 ## How we work an optimization idea
 
-1. One idea, one branch, off `master`, named `perf/<id>-<slug>` matching
-   the `#<id>` row in `README.md`'s checklist.
+1. One idea, one branch, off `master`, named `perf/<id>-<slug>`, where
+   `<id>` is the next free number after the highest `#<n>` already used
+   in git history (`git log --oneline --all | grep -oE '#[0-9]+'` finds
+   it) -- there's no longer a live checklist table to read it off of.
 2. Implement it under the relevant `ifd`/`ifnd` guards so it never
    silently changes behavior for a CPU target it wasn't meant for
    (`CPU020`/`CPU040`/`CPU080`, `NOMATHLIB`, `FPN080`/`FPC080`/`FPSR080`).
 3. Run the benchmark harness (`BENCHMARK.md`) before *and* after your
    change, on the same golden vectors, same CPU target(s) as the idea
    claims to help.
-4. Update the checklist row in `README.md`:
-   - Net win, no correctness regression → mark it ✅ merged, record the
-     measured delta, merge the branch into `master`.
+4. Record the result:
+   - Net win, no correctness regression → merge the branch into
+     `master`, add a sentence to `README.md`'s Architecture section
+     describing what changed, with the measured delta in the commit
+     message (that's the permanent record of *why*, not a checklist
+     cell).
    - No measurable win, or a correctness regression you can't fix within
-     scope → mark it ❌, ~~strike the idea's name~~, write one sentence on
-     *why* it didn't pan out, leave the branch pushed and unmerged.
+     scope → write one sentence in the commit message on *why* it
+     didn't pan out, leave the branch pushed and unmerged.
 5. **Never delete a branch or force-push over one**, win or lose — a
    rejected idea's code is a record that it was tried, and it may become
-   relevant again once a dependency (another row) lands.
-6. Go back to `master`, pick the next row whose `Depends on` column is
-   already satisfied, repeat.
+   relevant again once something else changes the answer.
+6. Go back to `master`, repeat for the next idea.
 
 Don't batch unrelated ideas into one branch — you can't attribute a cycle
 delta to a change you can't isolate.
@@ -82,8 +88,8 @@ delta to a change you can't isolate.
 ## Low-level / assembly practices
 
 - **Measure, don't guess.** "This should be faster" is a hypothesis, not
-  a commit message. The benchmark harness exists so every claim in the
-  checklist has a number next to it.
+  a commit message. The benchmark harness exists so every performance
+  claim has a number next to it.
 - **Document register usage.** Follow the existing convention (see any
   macro in `src/utils/math64.asm` or `src/utils/double.asm`): a header
   comment listing INPUTS / RESULT / scratch registers clobbered. A reader
@@ -105,18 +111,20 @@ delta to a change you can't isolate.
   idea drops strict NaN/Inf/denormal handling on the fast path, it must
   still produce the *correct* answer for those inputs — either by falling
   through to a correct slow path when a cheap check detects a special
-  value, or by an explicit build-time flag the checklist row documents.
-  We are not in the business of quietly returning wrong answers faster.
-- **Don't touch unrelated TODOs while working a checklist row.** Note
-  them, don't fix them inline — that's how a "cycle-count fadd" branch
-  turns into an unreviewable diff. File them as a candidate future row
-  in the checklist instead.
+  value, or by an explicit build-time flag the commit message and
+  `README.md` both document. We are not in the business of quietly
+  returning wrong answers faster.
+- **Don't touch unrelated TODOs while working one idea.** Note them,
+  don't fix them inline — that's how a "cycle-count fadd" branch turns
+  into an unreviewable diff. File them as a candidate future idea
+  instead.
 - **Comment the why, not the what.** The existing codebase already does
   this well in most places (see the header comments) — match that style.
 
 ## Where to look
 
-- `README.md` — the optimization checklist (source of truth for status).
+- `README.md` — what femu actually is right now (Architecture section).
+  Not a status table; past-idea history lives in git log, not here.
 - `BENCHMARK.md` — how to measure a change: harness design, how to run
   it, how to read its output, what counts as "an actual improvement".
 - `NEXT.md` — the one-paragraph state-of-the-world doc; read this first
