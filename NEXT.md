@@ -508,11 +508,26 @@ all-MATCH. Bumped to 256. Measured: fsinh 26720-26906->18622-18677
 31967->19148 (-40%, plus 3 more vectors now actually running for the
 first time). Every vector bit-exact; no regressions elsewhere.
 
-Next up in this row: `ftwotox`/`ftentox`/`flog2`/`flog10` still
+Checked `ftwotox`/`ftentox`/`flog2`/`flog10` too: all four still
 derive from `NativeFexp`/`NativeFlogn`, but unlike fsinh/fcosh/ftanh
 each already only makes ONE call to the shared kernel plus one cheap
-multiply -- the same shape facos's own glue uses -- so it's not
-obvious there's further chaining left to cut there.
+multiply -- the same shape facos's own glue uses -- so there was no
+double-call pattern to cut here, and they're left as-is.
+
+**This closes out checklist `#13`.** Every function `#10` originally
+named has either been rewritten to a shorter minimax series
+(`fsin`/`fcos`/`ftan`/`fsincos`/`fatan`/`fasin`/`facos`/`fetox`/
+`flogn`), de-derived to a single kernel call (`fsinh`/`fcosh`/
+`ftanh`), or checked and confirmed to need neither (`ftwotox`/
+`ftentox`/`flog2`/`flog10`, and `fsqrt`, never part of the problem
+this row measured in the first place). CORDIC was tried for the
+circular family, measured 2-3x slower, and reverted (kept,
+unreferenced, in `src/utils/cordic.asm`) -- minimax carried the row
+instead.
+
+`#12` (relaxed-precision internal format) is the only row left on
+the checklist, deliberately skipped earlier this session as "a
+broader change" -- fair game whenever it's picked up.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed
