@@ -400,6 +400,187 @@ endm
 
 
 ;
+; Relaxed-precision internal format (checklist #12): effective 32-bit
+; mantissa, gated by MANTISSA32 -- see FE_FADD_32's header comment in
+; fadd.asm for the full "round every operand first, every call" design
+; and why it's correct regardless of what a value's low mantissa word
+; already contains. Structured identically to FE_FMUL_SINGLE below (same
+; sign/combined-exponent-first order, same round-dst-then-round-src step,
+; same two-case top-bit split for the product), just at width 32 instead
+; of 24 -- which removes FE_FMUL_SINGLE's extra right-justify/widen
+; shifting entirely, since 32 bits lands exactly on a register boundary
+; (one mulu.l instead of MUL64's four either way; the 24-bit path exists
+; because real fsmul/fsgldiv hardware semantics demand that exact width,
+; not because 24 is otherwise special here). Verified in Python (single
+; mulu.l + round-to-nearest-even against exact Fraction arithmetic,
+; 50000 random cases, 0 mismatches) before writing this.
+;
+; d0 - destination sign(1):exponent(15):reserved(16) -> combined result
+;      exponent (pure exponent, no sign -- sign lives in MulSign)
+; d1 - destination mantissa hi32 -> rounded 32-bit dst mantissa -> one
+;      factor of the 32x32->64 multiply -> product low32 (round/sticky
+;      source for the final round)
+; d2 - destination mantissa lo32 -> round/sticky source for the dst
+;      rounding step, then unused
+; d3 - source sign(1):exponent(15):reserved(16) -> scratch (exponent
+;      extraction) -> round-up scratch
+; d4 - source mantissa hi32 -> rounded 32-bit src mantissa -> other
+;      factor of the multiply
+; d5 - source mantissa lo32 -> round/sticky source for the src rounding
+;      step, then unused
+; d6 - scratch (fast-path probe, Inf/NaN/zero probe, sign xor) -> product
+;      high32 (mulu.l) -> result mantissa
+; d7 - reserved
+;
+	ifd MANTISSA32
+FE_FMUL_32 macro
+
+	; Fast path / special-case ladder -- identical to FE_FMUL's
+	bfextu			d0{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.N32SpecialCase
+	bfextu			d3{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.N32SpecialCase
+	bra.w			.N32MainBody
+
+	.N32SpecialCase:
+	bfextu			d0{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.N32DstExpOk
+	bra.w			.N32Done
+	.N32DstExpOk:
+	bfextu			d3{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.N32SrcExpOk
+	move.l			d3,d0
+	move.l			d4,d1
+	move.l			d5,d2
+	bra.w			.N32Done
+	.N32SrcExpOk:
+
+	bfextu			d0{1:15},d6
+	bne.s			.N32DstExpNoZ
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	moveq			#0,d1
+	moveq			#0,d2
+	move.l			d6,d0
+	bra.w			.N32Done
+	.N32DstExpNoZ:
+	bfextu			d3{1:15},d6
+	bne.s			.N32SrcExpNoZ
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	moveq			#0,d1
+	moveq			#0,d2
+	move.l			d6,d0
+	bra.w			.N32Done
+	.N32SrcExpNoZ:
+
+	.N32MainBody:
+	; Sign + combined (biased) exponent, same order as FE_FMUL_SINGLE --
+	; any exponent bump from the operand rounding below just adds onto
+	; this already-combined value.
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	move.l			d6,MulSign
+	bfextu			d0{1:15},d0
+	bfextu			d3{1:15},d3
+	add.w			d3,d0
+	sub.w			#16383,d0
+
+	; Round dst mantissa (d1:d2 -> d1) and src mantissa (d4:d5 -> d4) to
+	; 32 bits -- see FE_FADD_32 for why d2/d5 are already exactly the
+	; round+sticky bits a 64->32 round needs, no shift required.
+	tst.l			d2
+	beq.s			.N32DstNoRound
+	btst			#31,d2
+	beq.s			.N32DstNoRound
+	move.l			d2,d3
+	and.l			#$7fffffff,d3
+	bne.s			.N32DstRoundUp
+	btst			#0,d1
+	beq.s			.N32DstNoRound
+	.N32DstRoundUp:
+	addq.l			#1,d1
+	bcc.s			.N32DstNoRound
+	move.l			#$80000000,d1
+	addq.w			#1,d0
+	.N32DstNoRound:
+
+	tst.l			d5
+	beq.s			.N32SrcNoRound
+	btst			#31,d5
+	beq.s			.N32SrcNoRound
+	move.l			d5,d3
+	and.l			#$7fffffff,d3
+	bne.s			.N32SrcRoundUp
+	btst			#0,d4
+	beq.s			.N32SrcNoRound
+	.N32SrcRoundUp:
+	addq.l			#1,d4
+	bcc.s			.N32SrcNoRound
+	move.l			#$80000000,d4
+	addq.w			#1,d0
+	.N32SrcNoRound:
+
+	; Multiply the two 32-bit mantissas (already explicit-bit) -> 64-bit
+	; product in d6:d1 -- one mulu.l where FE_FMUL's MUL64 needs four.
+	mulu.l			d4,d6:d1
+
+	; The product of two values in [2^31,2^32) lands in [2^62,2^64): its
+	; leading bit is always at bit 62, and bit 63 besides that iff the
+	; product is >= 2^63 -- same fixed two-case split as FE_FMUL's own
+	; Top127/Top126, scaled down to one register pair instead of two.
+	btst			#31,d6
+	bne.s			.N32Top64
+	lsl.l			#1,d1
+	roxl.l			#1,d6
+	bra.s			.N32Top64Shifted
+
+	.N32Top64:
+	addq.w			#1,d0
+	.N32Top64Shifted:
+	; Mantissa is now exactly d6 (the product's top 32 bits); round bit
+	; is the product's next bit (d1's MSB), sticky is everything below.
+	btst			#31,d1
+	beq.s			.N32NoRoundUp
+	move.l			d1,d3
+	andi.l			#$7fffffff,d3
+	bne.s			.N32RoundUp
+	btst			#0,d6
+	beq.s			.N32NoRoundUp
+	.N32RoundUp:
+	addq.l			#1,d6
+	bcc.s			.N32NoRoundUp
+	; mantissa overflowed past 32 bits (was all-ones): renormalize
+	move.l			#$80000000,d6
+	addq.w			#1,d0
+	.N32NoRoundUp:
+
+	; Construct result word0 (see FE_FMUL for why the shift alone lands
+	; the exponent at bits 30-16), and force the low mantissa word flat
+	; per #12's contract
+	lsl.l			#8,d0
+	lsl.l			#8,d0
+	move.l			MulSign,d3
+	or.l			d3,d0
+	move.l			d6,d1
+	moveq			#0,d2
+
+	.N32Done:
+
+endm
+	endif
+
+
+;
 ;
 ;
 FMULHANDLER macro
@@ -437,6 +618,12 @@ FMULHANDLER macro
 	; explicitly asked for single-rounded results does this take the
 	; narrowed-operand fast path instead of the always-hardware-correct
 	; FE_FMUL.
+	; Checklist #12: under MANTISSA32, plain fmul/fdmul's "else" (FPCR
+	; didn't ask for single) uses the narrowed FE_FMUL_32 instead of the
+	; full FE_FMUL -- FPCR-forced single (narrower still, 24 < 32 bits)
+	; and opcode-forced single above are both untouched by this build
+	; flag, since those are real 68881 semantics, not this row's own
+	; relaxation.
 	ifnb \1
 		FE_FMUL_SINGLE
 	else
@@ -444,7 +631,11 @@ FMULHANDLER macro
 		andi.b			#FPCR_PRECMASK,d6
 		cmp.b			#FPCR_SINGLE,d6
 		beq.w			.UseSingle
-		FE_FMUL
+		ifd MANTISSA32
+			FE_FMUL_32
+		else
+			FE_FMUL
+		endif
 		bra.w			.MulDone
 		.UseSingle:
 		FE_FMUL_SINGLE

@@ -96,7 +96,7 @@ result) in [Checklist details](#checklist-details) below.
 | [9](#row-9) | Fast paths for cheap transcendental special cases | 1 | ✅ Done (`ftentox` scoped out) | `claude/keen-mendel-3hb6vs` |
 | [10](#row-10) | Native transcendentals (drop `mathieeedoubtrans.library`) | 1, 4 | ✅ Done (14/14 + `fsqrt` — see row) | `claude/keen-mendel-3hb6vs` |
 | [11](#row-11) | Fix `fmovem` bulk register move | 0 | ✅ Done | `claude/keen-mendel-3hb6vs` |
-| [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | 🔲 Not started | `perf/12-relaxed-precision` |
+| [12](#row-12) | Relaxed-precision internal format: keep the 80-bit layout but force the low 16/32 mantissa bits to 0 (round) or 1 (truncate), and do the arithmetic itself at the resulting 48/32 effective bits | 4 | ✅ Done (`MANTISSA32` build switch — see row) | `claude/keen-mendel-3hb6vs` |
 | [13](#row-13) | CORDIC (or a shorter minimax series) for `#10`'s native transcendentals, to cut the per-hop chaining cost `#10` measured | 10 | ✅ Done (minimax across the whole `#10` family; CORDIC tried, measured 2-3x slower, reverted — see row) | `claude/keen-mendel-3hb6vs` |
 
 ### Checklist details
@@ -1231,17 +1231,102 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   says single — closer to what `#4`'s own design doc originally hoped
   `#4` itself would deliver before measurement showed otherwise.
 - **Depends on:** 4
-- **Status:** 🔲 Not started
-- **Branch:** `perf/12-relaxed-precision`
-- **Result:** — Suggested by the user after `#5`/`#8`/`#9` landed; not
-  started. Worth noting up front for whoever picks this up: this is a
-  real, opt-in *relaxation* in the `CLAUDE.md` sense (the same tradeoff
-  `#5` already accepted for the single-precision fast path specifically)
-  — it must still fall through to a correct path when precision actually
-  matters, never silently round wrong, and the checklist row should
-  record where the line is drawn (e.g. does 48-bit mode replace `#4`'s
-  64-bit default outright, or sit alongside it as a third FPCR-style
-  mode next to extended/single/double?).
+- **Status:** ✅ Done
+- **Branch:** `perf/12-relaxed-precision` (implemented, measured, and
+  merged to `master` from `claude/keen-mendel-3hb6vs`; kept pushed per
+  `CLAUDE.md`'s "never delete a branch" rule even though its content is
+  now also in `master`)
+- **Result:** Shipped as a new build-time switch, `-D MANTISSA32`
+  (`vasm`'s own `-D` convention, same shape as `CPU020`/`NOMATHLIB`) —
+  **a third mode sitting alongside `#4`'s 64-bit default**, not a
+  replacement for it: the default build is still full 64-bit mantissa
+  ("science work" precision, per the user's own framing), and
+  `MANTISSA32` is an explicit opt-in for constrained real hardware (the
+  user's own example: "trying to run Quake on an LC060"). Only 32-bit
+  width shipped — the row's own "48 or 32" was narrowed to just 32 per
+  the user's explicit request, keeping this one idea instead of two.
+
+  **Where the line is drawn** (the `CLAUDE.md` relaxation contract):
+  every operand is rounded to a 32-bit significant mantissa (round to
+  nearest, ties to even) at the start of every `fadd`/`fsub`/`fmul`/
+  `fdiv` under this build, *every call*, regardless of what its low
+  mantissa word already contains — the same "round first" trick `#5`'s
+  `FE_FMUL_SINGLE`/`FE_FDIV_SINGLE` already use for 24-bit single, just
+  at 32 bits and applied unconditionally instead of only when FPCR/the
+  opcode asks for single. This means the narrowing is correct for
+  *any* input, never a silent truncation of bits nobody rounded away
+  first. `fsmul`/`fsdiv`/`fsadd` (opcode-forced single, real 24-bit
+  68881 semantics) and FPCR-forced single are both left completely
+  alone by this flag — those are hardware-mandated widths, not this
+  row's own relaxation, and 24 bits is already narrower than 32 so
+  there's nothing to gain by rerouting them. Transcendentals (`#10`/
+  `#13`) are untouched too: they're out of scope for this row, which
+  only covers the four basic arithmetic ops' own `FE_*` macros.
+
+  New macros `FE_FADD_32`/`FE_FMUL_32`/`FE_FDIV_32` (`src/ops/fadd.asm`/
+  `fmul.asm`/`fdiv.asm`, each `ifd MANTISSA32`-gated) mirror their
+  64-bit counterparts' structure exactly (same fast-path/special-case
+  ladder, same align-then-combine-then-normalize shape for add, same
+  fixed-two-case product-alignment split for multiply, same lead-bit
+  pre-normalize + phantom round-bit step for divide) but operate on a
+  single 32-bit register per mantissa instead of a 64-bit register
+  pair: `FE_MUL_32` needs one `mulu.l` where `FE_FMUL`'s `MUL64` needs
+  four, and `FE_DIV_32` runs the restoring-division loop for 32
+  iterations instead of `DIV64`'s 64 (plus the same one phantom
+  round-bit iteration `FE_FDIV` already pays) — directly halving the
+  loop that dominates that op's cost. `FE_FADD_32`'s align/normalize
+  steps collapse to single-register shifts with no low-word fallback
+  at all (there's only one word to begin with), truncating on an
+  align-shift exactly like `FE_FADD` itself does (no new rounding
+  behavior invented for that case). `FADDHANDLER`/`FSUBHANDLER` always
+  use the narrow path under this build (no FPCR-single check exists
+  for `fadd`/`fsub` to begin with — row `#5` only ever covered `fmul`/
+  `fdiv`); `FMULHANDLER`/`FDIVHANDLER` use it only in the "FPCR didn't
+  ask for single" branch, leaving the single-precision dispatch above
+  it untouched.
+
+  Verified in Python (`Fraction`-exact arithmetic, 30000-50000 random
+  cases per op) *before* writing any assembly: `FE_MUL_32`'s single-
+  multiply-plus-round and `FE_DIV_32`'s 32-iteration restoring division
+  both matched a correctly-rounded (nearest, ties-to-even) 32-bit-
+  mantissa reference with **0 mismatches**; `FE_FADD_32`'s truncating
+  align-shift was checked for structural equivalence against `FE_FADD`'s
+  own algorithm at the narrower width, not against a stricter "true"
+  rounding bar `FE_FADD` itself doesn't meet either. One real bug this
+  caught before assembly: an early `FE_DIV_32` draft's lead-bit case
+  dropped the implicit 33rd bit the pre-normalize subtraction proves is
+  there, undercounting the result by exactly `2^31` in that mantissa
+  position — caught by the Python check failing by exactly that amount,
+  not a guess.
+
+  **Measured** (`bench/`'s new checklist-#12 probe —
+  `src/mantissa32_probe.asm`/`run_mantissa32_probe` — comparing the new
+  `femu020m32.bin` build against the exact same opcodes/operands run on
+  the existing NOMATHLIB build): all 4 ops `MATCH` their correctly-
+  rounded-to-32-bits expected value (verified independently of the
+  macros themselves, via a `round_to_n_bits` host helper). Cycle counts,
+  same operands, `MANTISSA32` vs. the 64-bit default:
+
+  | op | 64-bit (default) | 32-bit (`MANTISSA32`) | delta |
+  |----|------------------:|------------------------:|------:|
+  | `fadd` | 993 | 970 | ~2% faster |
+  | `fsub` | 1025 | 963 | ~6% faster |
+  | `fmul` | 1163 | 922 | ~21% faster |
+  | `fdiv` | 5299 | 1949 | **~63% faster** (2.7×) |
+
+  `fdiv` is the clear win this row was worth doing for — halving
+  `DIV64`'s dominant iteration count is a real, large effect, exactly
+  where the LC060/Quake motivation would feel it most. `fmul` is a
+  solid secondary win. `fadd`/`fsub` are only marginally faster: the
+  narrower `ALIGNEXPONENT`/`ADD64`/`NORMALIZE` path saves real cycles,
+  but the mandatory "round every operand to 32 bits first" step (needed
+  for the relaxation to be correct regardless of input, per the
+  contract above) gives most of it back. Still a net win, never a
+  regression, so this stays merged rather than split further — but
+  worth recording plainly rather than oversold. Whole-suite regression
+  check: every other vector/probe in `bench/` remains bit-exact (only
+  the already-explained `fcosh(9.43)` 1-ULP case persists), confirming
+  the default (non-`MANTISSA32`) build is completely unaffected.
 
 <a id="row-13"></a>
 #### #13 — CORDIC (or a shorter series) for the native transcendentals

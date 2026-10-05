@@ -172,6 +172,32 @@ static int values_match(double got, double want)
 	return got == want;
 }
 
+/* Checklist #12's relaxed-precision (MANTISSA32) probe reference: the
+ * correctly-rounded (nearest, ties to even) value of v at the given
+ * number of significant bits -- what FE_FADD_32/FE_FMUL_32/FE_FDIV_32
+ * promise for fmul/fdiv (verified in Python against exact Fraction
+ * arithmetic before any assembly was written; see fadd.asm's FE_FADD_32
+ * header comment). Doubles carry 53 bits of their own, comfortably more
+ * than the 32 asked for here, so this round-trips through frexp/ldexp
+ * with no precision loss of its own.
+ */
+static double round_to_n_bits(double v, int bits)
+{
+	int sign, e;
+	double m, scaled, rounded, limit;
+	if (v == 0.0 || !isfinite(v)) return v;
+	sign = v < 0;
+	m = frexp(fabs(v), &e); /* fabs(v) == m * 2^e, m in [0.5,1) */
+	limit = (double)(1LL << bits);
+	scaled = m * limit; /* in [limit/2, limit) */
+	rounded = nearbyint(scaled); /* round to nearest, ties to even */
+	if (rounded >= limit) { rounded /= 2.0; e++; }
+	{
+		double result = rounded * ldexp(1.0, e - bits);
+		return sign ? -result : result;
+	}
+}
+
 static double mem_get_extended(unsigned addr)
 {
 	unsigned word0 = rd_long(addr), mhi = rd_long(addr + 4), mlo = rd_long(addr + 8);
@@ -688,6 +714,62 @@ static void run_fsmul_probe(const struct image *img)
 	}
 }
 
+/* Checklist #12's relaxed-precision (MANTISSA32) probe: plain fadd/fsub
+ * (no FPCR-single check exists for these -- see FADDHANDLER/FSUBHANDLER)
+ * and plain fmul/fdiv with FPCR left at extended (so FMULHANDLER/
+ * FDIVHANDLER's "else" branch takes FE_FMUL_32/FE_FDIV_32 under this
+ * build, see fmul.asm/fdiv.asm). Runs against img, which the caller
+ * loads from the MANTISSA32-built binary (femu020m32.bin), not either
+ * of the two variant_paths used everywhere else in this file. The add/
+ * sub operands are deliberately small and exact (round_to_n_bits is a
+ * no-op on either one, and their sum/difference needs nowhere near 32
+ * bits either) so the comparison isn't entangled with FE_FADD_32's own
+ * truncating-on-align-shift behavior -- that structural correctness was
+ * already verified in Python (see fadd.asm's header comment), this
+ * probe only needs to confirm the assembly runs end to end. The mul/div
+ * operands mirror run_fsmul_probe's own choices one width up: 2^32-1 (a
+ * clean power-of-two-minus-one, forcing a real round-to-nearest-even at
+ * the 32-bit boundary) times 3, and 7/3 (not exact in binary at all).
+ */
+static void run_mantissa32_probe(const struct image *img)
+{
+	static const char *names[4] = {
+		"fadd.x fp1,fp0", "fsub.x fp1,fp0", "fmul.x fp1,fp0", "fdiv.x fp1,fp0",
+	};
+	const double add_a = 12345.5, add_b = 6789.25;
+	const double mul_a = 4294967295.0, mul_b = 3.0;
+	const double div_a = 7.0, div_b = 3.0;
+	double a, b, expected;
+	int i, done;
+	long cycles;
+	double got;
+
+	printf("\n=== fadd/fsub/fmul/fdiv relaxed-precision probe (checklist #12) ===\n");
+	printf("%-30s %14s %10s  %s\n", "op", "cycles", "match", "note");
+
+	for (i = 0; i < 4; i++) {
+		switch (i) {
+		case 0: a = add_a; b = add_b; expected = a + b; break;
+		case 1: a = add_a; b = add_b; expected = a - b; break;
+		case 2: a = mul_a; b = mul_b; expected = round_to_n_bits(a * b, 32); break;
+		default: a = div_a; b = div_b; expected = round_to_n_bits(a / b, 32); break;
+		}
+		mem_put_extended(img->reg_fpn + 0, a);
+		mem_put_extended(img->reg_fpn + 12, b);
+
+		cycles = run_one_opcode(img, (unsigned)i, &done);
+		if (!done) {
+			printf("%-30s %14s %10s  TIMEOUT after %d steps\n",
+			       names[i], "-", "-", MAX_STEPS);
+			continue;
+		}
+
+		got = mem_get_extended(img->reg_fpn + 0);
+		printf("%-30s %14ld %10s  %.17g vs %.17g\n", names[i], cycles,
+		       values_match(got, expected) ? "MATCH" : "DIFFER", got, expected);
+	}
+}
+
 /* Checklist #6's opcode-chaining probe: real, back-to-back F-line
  * opcodes with no padding between them at all (chain_probe.asm) -- the
  * opposite of every other probe in this file, which goes out of its way
@@ -1160,6 +1242,41 @@ int main(int argc, char **argv)
 		load_slotted_opcodes(TEST_CODE, probe_ops, 1);
 
 		run_fsincos_probe(&img);
+	}
+
+	/* Relaxed-precision (MANTISSA32) probe for checklist #12 -- the one
+	 * block in this file that loads femu020m32.bin instead of either of
+	 * variant_paths, since this build flag isn't one of the two
+	 * variants the main vector loop above compares.
+	 */
+	{
+		struct image img;
+		unsigned char probe_ops[4 * 4];
+		size_t fsize = 0, probe_size;
+		FILE *pf;
+
+		pf = fopen("build/mantissa32_probe.bin", "rb");
+		if (!pf) { fprintf(stderr, "bench: build/mantissa32_probe.bin missing -- run make first\n"); return 1; }
+		probe_size = fread(probe_ops, 1, sizeof probe_ops, pf);
+		fclose(pf);
+		if (probe_size != sizeof probe_ops) {
+			fprintf(stderr, "bench: build/mantissa32_probe.bin has the wrong size (%zu bytes, expected %zu)\n",
+			        probe_size, sizeof probe_ops);
+			return 1;
+		}
+
+		memset(mem, 0, MEM_SIZE);
+		load_binary("build/femu020m32.bin", 0, &fsize);
+		if (fsize == 0) {
+			fprintf(stderr, "bench: build/femu020m32.bin missing or empty -- run make first\n");
+			return 1;
+		}
+		parse_image_header(&img);
+		fill_illegal(BAS_LIB_BASE, LIB_REGION_SIZE);
+		fill_illegal(TRANS_LIB_BASE, LIB_REGION_SIZE);
+		load_slotted_opcodes(TEST_CODE, probe_ops, 4);
+
+		run_mantissa32_probe(&img);
 	}
 
 	return 0;
