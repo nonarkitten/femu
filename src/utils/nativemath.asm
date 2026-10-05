@@ -366,14 +366,15 @@ NativeIntToExtended
 ; derivation (ExpLn2/ExpInvLn2 below), not a re-derived approximation,
 ; so the two don't disagree with each other.
 ;
-; 16 terms (1/0! through 1/15!) were verified in Python (exact Decimal
-; arithmetic, not host-double-limited) to bring the Taylor series'
-; OWN truncation error below 2^-63 (this format's mantissa precision)
-; across the whole reduced range |r| <= ln(2)/2 well before writing
-; any assembly -- truncation stops being the dominant error source at
-; that point; what's left is ordinary accumulated rounding from the 16
-; multiply-add steps themselves, same as any other chained computation
-; in this codebase.
+; 13-term minimax (checklist #13, Remez exchange in Python, mpmath
+; 60-digit precision) replaces the original 16-term Taylor series --
+; e^r's own Taylor series DOES have factorial decay (unlike atan's/
+; asin's Gregory-style series), so minimax's win here is modest, same
+; scale as sin/cos's own 11->8 rather than atan's 25->13. Verified
+; end-to-end (range reduction + 13-term Horner, 30000+ random |x| up
+; to 50) against mpmath's own `exp` before writing any assembly: worst
+; case ~0.53 ULP, comfortably inside the margin the original 16-term
+; series used.
 ;
 ; INPUTS
 ;	d0 -- Sign(1):exponent(15):reserved(16). Must be an ordinary
@@ -427,20 +428,20 @@ NativeFexp
 	move.l			d1,ExpR+4
 	move.l			d2,ExpR+8
 
-	; Horner evaluation: result = C15; for n=14 downto 0,
+	; Horner evaluation: result = C12; for n=11 downto 0,
 	; result := result*r + Cn. a0 walks the constant table forward
-	; from ExpC14 (ExpC15 seeds the accumulator first, outside the
+	; from ExpC11 (ExpC12 seeds the accumulator first, outside the
 	; loop) -- the constants are declared contiguously, 12 bytes
 	; apart, highest-term-first in the source but therefore lowest-
 	; address-first in memory, purely so this can be a plain address
 	; increment instead of an indexed lookup.
-	lea.l			ExpC15,a0
+	lea.l			ExpC12,a0
 	movem.l			(a0),d0/d1/d2
 	move.l			d0,ExpResult
 	move.l			d1,ExpResult+4
 	move.l			d2,ExpResult+8
-	lea.l			ExpC14,a0
-	move.l			#14,ExpIterCount
+	lea.l			ExpC11,a0
+	move.l			#11,ExpIterCount
 	.HornerLoop:
 	move.l			ExpResult,d0
 	move.l			ExpResult+4,d1
@@ -504,22 +505,22 @@ ExpK		dc.l	0
 ExpR		dc.l	0,0,0
 ExpResult	dc.l	0,0,0
 ExpIterCount	dc.l	0
-ExpC15		dc.l	$3fd60000,$d73f9f39,$9dc0f88f	; 1/15!
-ExpC14		dc.l	$3fda0000,$c9cba546,$03e4e906	; 1/14!
-ExpC13		dc.l	$3fde0000,$b092309d,$43684be5	; 1/13!
-ExpC12		dc.l	$3fe20000,$8f76c77f,$c6c4bdaa	; 1/12!
-ExpC11		dc.l	$3fe50000,$d7322b3f,$aa271c7f	; 1/11!
-ExpC10		dc.l	$3fe90000,$93f27dbb,$c4fae397	; 1/10!
-ExpC9		dc.l	$3fec0000,$b8ef1d2a,$b6399c7d	; 1/9!
-ExpC8		dc.l	$3fef0000,$d00d00d0,$0d00d00d	; 1/8!
-ExpC7		dc.l	$3ff20000,$d00d00d0,$0d00d00d	; 1/7!
-ExpC6		dc.l	$3ff50000,$b60b60b6,$0b60b60b	; 1/6!
-ExpC5		dc.l	$3ff80000,$88888888,$88888889	; 1/5!
-ExpC4		dc.l	$3ffa0000,$aaaaaaaa,$aaaaaaab	; 1/4!
-ExpC3		dc.l	$3ffc0000,$aaaaaaaa,$aaaaaaab	; 1/3!
-ExpC2		dc.l	$3ffe0000,$80000000,$00000000	; 1/2!
-ExpC1		dc.l	$3fff0000,$80000000,$00000000	; 1/1!
-ExpC0		dc.l	$3fff0000,$80000000,$00000000	; 1/0!
+; 13-term minimax (checklist #13, Remez exchange in Python, mpmath
+; 60-digit precision), not the original 16-term Taylor series -- see
+; NativeFexp's own header comment above for the writeup.
+ExpC12		dc.l	$3fe20000,$8fd1c6e6,$88870e23	; minimax c12
+ExpC11		dc.l	$3fe50000,$d7bc2efe,$1288b6c5	; minimax c11
+ExpC10		dc.l	$3fe90000,$93f25d4b,$9c5dc40a	; minimax c10
+ExpC9		dc.l	$3fec0000,$b8eef3b5,$1c69352c	; minimax c9
+ExpC8		dc.l	$3fef0000,$d00d00db,$9c444305	; minimax c8
+ExpC7		dc.l	$3ff20000,$d00d00dc,$0130ba8c	; minimax c7
+ExpC6		dc.l	$3ff50000,$b60b60b6,$093e0391	; minimax c6
+ExpC5		dc.l	$3ff80000,$88888888,$86dba766	; minimax c5
+ExpC4		dc.l	$3ffa0000,$aaaaaaaa,$aaab0c0a	; minimax c4
+ExpC3		dc.l	$3ffc0000,$aaaaaaaa,$aaab11b4	; minimax c3
+ExpC2		dc.l	$3ffd0000,$ffffffff,$ffffffe6	; minimax c2
+ExpC1		dc.l	$3ffe0000,$ffffffff,$ffffffe4	; minimax c1
+ExpC0		dc.l	$3fff0000,$80000000,$00000000	; minimax c0
 
 
 ;
@@ -541,11 +542,16 @@ ExpC0		dc.l	$3fff0000,$80000000,$00000000	; 1/0!
 ; sqrt(2)" is just an unsigned 64-bit mantissa compare -- no general
 ; float comparison needed.
 ;
-; 13 terms (1/1, 1/3, ..., 1/25) were verified in Python (exact Decimal
-; arithmetic, 300000+ random samples plus the m=1/m->sqrt(2) boundary
-; cases) to bring the series' OWN truncation error to ~0.0015 ULP
-; (this format's mantissa precision) across the whole reduced range,
-; well before writing any assembly -- same margin #10's other rows use.
+; 9-term minimax (checklist #13, Remez exchange in Python, mpmath
+; 60-digit precision) replaces the original 13-term atanh/Gregory-
+; style series -- a bigger relative cut than e^x's own 16->13 (this
+; series decays only geometrically too, same reasoning as atan's/
+; asin's own series), but the absolute term count stays low because
+; sqrt(2)-centering above already keeps s^2 under ~0.0294, a notably
+; smaller reduced range than atan's or asin's own. Verified end-to-end
+; (full reduction pipeline, 30000+ random x spanning 600 decades of
+; magnitude plus the m=1/m->sqrt(2) boundary cases) against mpmath's
+; own `log` before writing any assembly: worst case ~0.024 ULP.
 ;
 ; INPUTS
 ;	d0 -- Sign(1):exponent(15):reserved(16). Must be an ordinary
@@ -631,18 +637,20 @@ NativeFlogn
 	move.l			d1,LognS2+4
 	move.l			d2,LognS2+8
 
-	; Horner evaluation: result = C12; for n=11 downto 0,
+	; Horner evaluation: result = C8; for n=7 downto 0,
 	; result := result*s2 + Cn. Same address-increment trick as
 	; NativeFexp's Horner loop (see there for why the constants are
 	; declared highest-term-first in source, lowest-address-first in
-	; memory).
-	lea.l			LognC12,a0
+	; memory). 9-term minimax (checklist #13), not the original
+	; 13-term atanh series -- see this file's own NativeFlogn header
+	; comment for the writeup.
+	lea.l			LognC8,a0
 	movem.l			(a0),d0/d1/d2
 	move.l			d0,LognResult
 	move.l			d1,LognResult+4
 	move.l			d2,LognResult+8
-	lea.l			LognC11,a0
-	move.l			#11,LognIterCount
+	lea.l			LognC7,a0
+	move.l			#7,LognIterCount
 	.HornerLoop:
 	move.l			LognResult,d0
 	move.l			LognResult+4,d1
@@ -726,19 +734,15 @@ LognS2				dc.l	0,0,0
 LognResult			dc.l	0,0,0
 LognIterCount		dc.l	0
 LognLnM				dc.l	0,0,0
-LognC12		dc.l	$3ffa0000,$a3d70a3d,$70a3d70a	; 1/25
-LognC11		dc.l	$3ffa0000,$b21642c8,$590b2164	; 1/23
-LognC10		dc.l	$3ffa0000,$c30c30c3,$0c30c30c	; 1/21
-LognC9		dc.l	$3ffa0000,$d79435e5,$0d79435e	; 1/19
-LognC8		dc.l	$3ffa0000,$f0f0f0f0,$f0f0f0f1	; 1/17
-LognC7		dc.l	$3ffb0000,$88888888,$88888889	; 1/15
-LognC6		dc.l	$3ffb0000,$9d89d89d,$89d89d8a	; 1/13
-LognC5		dc.l	$3ffb0000,$ba2e8ba2,$e8ba2e8c	; 1/11
-LognC4		dc.l	$3ffb0000,$e38e38e3,$8e38e38e	; 1/9
-LognC3		dc.l	$3ffc0000,$92492492,$49249249	; 1/7
-LognC2		dc.l	$3ffc0000,$cccccccc,$cccccccd	; 1/5
-LognC1		dc.l	$3ffd0000,$aaaaaaaa,$aaaaaaab	; 1/3
-LognC0		dc.l	$3fff0000,$80000000,$00000000	; 1/1
+LognC8		dc.l	$3ffb0000,$87d0f30f,$8c58ae82	; minimax c8
+LognC7		dc.l	$3ffb0000,$87aa77c1,$9b5d5120	; minimax c7
+LognC6		dc.l	$3ffb0000,$9d90896c,$f185b063	; minimax c6
+LognC5		dc.l	$3ffb0000,$ba2e6db2,$ab4008f9	; minimax c5
+LognC4		dc.l	$3ffb0000,$e38e3932,$12597d8d	; minimax c4
+LognC3		dc.l	$3ffc0000,$92492492,$0f6105ab	; minimax c3
+LognC2		dc.l	$3ffc0000,$cccccccc,$ccf758aa	; minimax c2
+LognC1		dc.l	$3ffd0000,$aaaaaaaa,$aaaaa4a3	; minimax c1
+LognC0		dc.l	$3fff0000,$80000000,$00000000	; minimax c0
 
 
 ;

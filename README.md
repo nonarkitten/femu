@@ -1279,10 +1279,15 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   than the original `#10` chain overall). CORDIC was tried first (per
   this row's own original idea), measured 2-3x *slower*, and reverted
   — kept as a documented dead end (`src/utils/cordic.asm`,
-  unreferenced by any op) rather than deleted. Still to do: `fetox`/
-  `flogn` and everything still derived from them (`fsinh`/`fcosh`/
-  `ftanh`, `ftwotox`/`ftentox`, `flog2`/`flog10`) haven't been looked
-  at for either approach yet.
+  unreferenced by any op) rather than deleted. `fetox` now runs a
+  13-term minimax series instead of the original 16-term Taylor
+  series (~17% faster); `flogn` now runs a 9-term minimax series
+  instead of the original 13-term atanh series (~15-21% faster). Still
+  to do: everything still derived from `fetox`/`flogn` (`fsinh`/
+  `fcosh`/`ftanh`, `ftwotox`/`ftentox`, `flog2`/`flog10`) hasn't been
+  given its own standalone treatment yet — they currently just inherit
+  `fetox`'s/`flogn`'s speedup for free, same as `fasin`/`facos` did
+  from `fatan` before getting their own rewrite.
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** Suggested by the user right after `#10` closed, having
   asked for and gotten the real chaining-cost numbers above (not a
@@ -1417,6 +1422,39 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   vector — including the two new ones — `MATCH`es bit-exactly; no
   regressions elsewhere (only the already-explained, non-bug
   `fcosh(9.43)` case persists).
+
+  **Minimax (`fetox`) — done, modest win like sin/cos's.** Same
+  approach, same reduced range (`r=x-k*ln(2)`, `|r|<=ln(2)/2`) the
+  existing range reduction already produces, same Horner-loop shape.
+  A **13-term** minimax polynomial clears the `2^-63` target the
+  original **16-term** Taylor series needed — `e^r`'s own series DOES
+  have genuine factorial decay (unlike `fatan`'s/`fasin`'s Gregory-
+  style series), so the win here is the same modest scale as sin/
+  cos's 11→8, not atan's dramatic 25→13. Verified end-to-end (range
+  reduction + 13-term Horner, 30000+ random `|x|` up to 50) against
+  `mpmath`'s own `exp`: worst case ~0.53 ULP.
+
+  **Minimax (`flogn`) — done, biggest relative win of this row's
+  "already-standalone" functions.** Same reduced range the existing
+  `sqrt(2)`-centering already produces. A **9-term** minimax
+  polynomial clears the target the original **13-term** atanh/
+  Gregory-style series needed — a real cut, though the absolute term
+  count stays low either way because `sqrt(2)`-centering already
+  keeps the reduced range tight (`s^2` under ~0.0294, tighter than
+  `fatan`'s or `fasin`'s own reduced ranges). Verified end-to-end
+  (30000+ random `x` spanning 600 decades of magnitude, plus the
+  `m=1`/`m->sqrt(2)` boundary cases) against `mpmath`'s own `log`:
+  worst case ~0.024 ULP.
+
+  **Measured**: `fetox` ~15621-16090→**~12998-13351** (-17%); `flogn`
+  ~7309-20217→**~5757-16676** (-15% to -21%, varying by which range-
+  reduction path a given input takes). Every vector `MATCH`es
+  bit-exactly; no regressions elsewhere (only the already-explained,
+  non-bug `fcosh(9.43)` case persists). `fsinh`/`fcosh`/`ftanh`/
+  `ftwotox`/`ftentox`/`flog2`/`flog10` all still derive from
+  `NativeFexp`/`NativeFlogn` and inherited this speedup for free —
+  giving each of those its own standalone minimax (same treatment
+  `fasin`/`facos` got) is still open.
 
 See `ISSUES.md` for the original author's per-opcode issue notes — several
 rows above trace directly back to entries there (e.g. "calls
