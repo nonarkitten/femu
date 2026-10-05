@@ -468,9 +468,23 @@ each op). Measured: `fasin` 55518->30613 (-45% overall), `facos`
 54925->30475 (-45%), plus the new branch's own vectors (15609/15910/
 15914). Every vector bit-exact; no regressions elsewhere.
 
-Next up in this row: `fetox`/`flogn` and everything still derived
-from them (`fsinh`/`fcosh`/`ftanh`, `ftwotox`/`ftentox`, `flog2`/
-`flog10`) haven't been looked at for either approach yet.
+`fetox`/`flogn` also got the minimax treatment (see `README.md`'s
+`#13` row for the full writeup). `fetox`: 13 terms replace the
+original 16-term Taylor series -- a modest win, same scale as sin/
+cos's 11->8, since e^r's series DOES have factorial decay (unlike
+atan's/asin's). `flogn`: 9 terms replace the original 13-term atanh
+series -- the absolute count stays low either way because sqrt(2)-
+centering already keeps the reduced range tight. Both verified
+end-to-end against mpmath's own exp/log before writing any assembly.
+Measured: `fetox` ~15621-16090->~12998-13351 (-17%), `flogn`
+~7309-20217->~5757-16676 (-15% to -21%). Every vector bit-exact; no
+regressions elsewhere. `fsinh`/`fcosh`/`ftanh`/`ftwotox`/`ftentox`/
+`flog2`/`flog10` all still derive from `NativeFexp`/`NativeFlogn` and
+inherited the speedup for free.
+
+Next up in this row: give each of `fsinh`/`fcosh`/`ftanh`/`ftwotox`/
+`ftentox`/`flog2`/`flog10` its own standalone minimax, same treatment
+`fasin`/`facos` already got -- none of them have been de-derived yet.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed
