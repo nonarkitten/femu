@@ -449,17 +449,28 @@ through `fatan` for now -- inherited the win for free: `fasin`
 55518->44261 (-20%), `facos` 54925->43941 (-20%). Every vector still
 bit-exact; no regressions elsewhere.
 
-Next up in this row: give `fasin`/`facos` their own standalone
-minimax, removing the `fatan`+`fsqrt` chain entirely (per the user's
-explicit "no derivations" direction -- asin has a sqrt-type
-singularity at x=+-1 that a single polynomial can't cover, so this
-needs the standard fdlibm-style split: a direct minimax for `|x|<0.5`,
-and `asin(x)=pi/2-2*asin(sqrt((1-|x|)/2))`-style reduction using
-`NativeFsqrt` as a plain arithmetic primitive -- not a second
-transcendental chain -- for `|x|>=0.5`). Then `fetox`/`flogn` and
-everything still derived from them (`fsinh`/`fcosh`/`ftanh`,
-`ftwotox`/`ftentox`, `flog2`/`flog10`) haven't been looked at for
-either approach yet.
+`fasin`/`facos` are also done now, fully standalone -- the
+`fatan`+`fsqrt`+arithmetic chain from `#10` is gone entirely, per the
+user's explicit "no derivations" direction (see `README.md`'s `#13`
+row for the full writeup). `asin` has a sqrt-type singularity at
+`x=+-1` a single polynomial can't cover, so this needed the standard
+fdlibm-style split: `asin(y)=y+y^3*P(y^2)` directly for `|x|<0.5`, and
+`asin(|x|)=pi/2-2*sqrt(t)*(1+t*P(t))` with `t=(1-|x|)/2` for
+`|x|>=0.5` -- the SAME minimax `P`, just evaluated at a different
+argument, since both branches only ever need `P(z)` for `z` in
+`[0,0.25]`. `NativeFsqrt` is still called once (one Newton-Raphson
+pass, a plain arithmetic primitive, not a second transcendental chain)
+for the `|x|>=0.5` branch. `P` needed 15 terms -- more than even
+`fatan`'s 13, same no-factorial reasoning. The existing bench vectors
+turned out to only ever exercise the `|x|>=0.5` branch -- caught
+before shipping, two new `|x|<0.5` vectors added (`0.3`/`-0.3` for
+each op). Measured: `fasin` 55518->30613 (-45% overall), `facos`
+54925->30475 (-45%), plus the new branch's own vectors (15609/15910/
+15914). Every vector bit-exact; no regressions elsewhere.
+
+Next up in this row: `fetox`/`flogn` and everything still derived
+from them (`fsinh`/`fcosh`/`ftanh`, `ftwotox`/`ftentox`, `flog2`/
+`flog10`) haven't been looked at for either approach yet.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

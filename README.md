@@ -1271,17 +1271,18 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 - **Status:** 🔲 In progress. `fsin`/`fcos`/`ftan`/`fsincos` now run an
   8-term minimax series instead of the original 11-term Taylor series
   (~21-26% faster). `fatan` now runs a 13-term minimax series instead
-  of the original 25-term Gregory series (~32-46% faster, `fasin`/
-  `facos` inheriting the improvement for free since they still chain
-  through it — see this row's own "still to do" for why that chain
-  itself hasn't been removed yet). CORDIC was tried first (per this
-  row's own original idea), measured 2-3x *slower*, and reverted —
-  kept as a documented dead end (`src/utils/cordic.asm`, unreferenced
-  by any op) rather than deleted. Still to do: give `fasin`/`facos`
-  their own standalone minimax (removing the `fatan`+`fsqrt` chain
-  entirely, per the user's explicit "no derivations" direction), and
-  look at `fetox`/`flogn` and everything still derived from them
-  (`fsinh`/`fcosh`/`ftanh`, `ftwotox`/`ftentox`, `flog2`/`flog10`).
+  of the original 25-term Gregory series (~32-46% faster). `fasin`/
+  `facos` are now fully standalone minimax too — the `fatan`+`fsqrt`
+  derivation chain is gone entirely, per the user's explicit "no
+  derivations" direction — and came out *another* ~31% faster on top
+  of what inheriting `fatan`'s win alone would have given (~45% faster
+  than the original `#10` chain overall). CORDIC was tried first (per
+  this row's own original idea), measured 2-3x *slower*, and reverted
+  — kept as a documented dead end (`src/utils/cordic.asm`,
+  unreferenced by any op) rather than deleted. Still to do: `fetox`/
+  `flogn` and everything still derived from them (`fsinh`/`fcosh`/
+  `ftanh`, `ftwotox`/`ftentox`, `flog2`/`flog10`) haven't been looked
+  at for either approach yet.
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** Suggested by the user right after `#10` closed, having
   asked for and gotten the real chaining-cost numbers above (not a
@@ -1366,10 +1367,54 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 
   **Measured**: `fatan` (no-reduction case) 24081→**13011** (-46%),
   (half-angle case) 30876→**19482** (-37%), (reciprocal case)
-  35671→**24328** (-32%). `fasin`/`facos` — still chaining through
-  `fatan` for now, see this row's own "still to do" — inherited the
-  win for free: `fasin` 55518→**44261** (-20%), `facos`
-  54925→**43941** (-20%). Every vector still `MATCH`es bit-exactly; no
+  35671→**24328** (-32%). `fasin`/`facos`, still chaining through
+  `fatan`+`fsqrt` at this point, inherited the win for free: `fasin`
+  55518→44261 (-20%), `facos` 54925→43941 (-20%) — both superseded by
+  the standalone rewrite below.
+
+  **Minimax (`fasin`/`facos`) — done, standalone, no derivation at
+  all.** The `fatan`+`fsqrt`+four-arithmetic-op chain from `#10` is
+  gone; `NativeFasin` (`src/utils/nativemath.asm`) is now a genuinely
+  standalone routine with its own range split, matching the standard
+  (fdlibm-style) treatment for `asin`'s sqrt-type singularity at
+  `|x|=1`, which a single polynomial can't cover: for `|x|<0.5`,
+  `asin(y) = y + y^3*P(y^2)` directly; for `|x|>=0.5`, the identity
+  `asin(|x|) = pi/2 - 2*sqrt(t)*(1+t*P(t))` with `t=(1-|x|)/2` — the
+  SAME minimax polynomial `P`, just evaluated at a different argument,
+  since both branches only ever need `P(z)` for `z` in `[0,0.25]`.
+  `NativeFsqrt` is still called once, for the `|x|>=0.5` branch — kept
+  deliberately: it's one Newton-Raphson pass, a plain arithmetic
+  primitive in the same category `NativeFmul`/`NativeFadd` already are
+  for every other row-`#10`/`#13` routine, not a second transcendental
+  range-reduction-plus-series chain, so calling it once here isn't the
+  pattern this row exists to remove. `facos.asm` still derives
+  `pi/2-asin(x)` from this routine's own result, the same cheap-glue
+  move `ftan.asm` makes on `NativeFsincos` — not a second chain either.
+
+  `P(z)` needed **15 minimax terms** via Remez exchange (in Python,
+  `mpmath`, 50-digit precision) to clear this format's `2^-63` margin
+  over `z` in `[0,0.25]` — more than even `fatan`'s 13, because `P`'s
+  own Taylor coefficients decay only geometrically too (same
+  no-factorial reasoning as `fatan`'s Gregory series). Cross-checked
+  two independent ways before writing any assembly (a Chebyshev-
+  economization pass and a full Remez run agreed to 3 significant
+  figures on both the term count and the error), then verified
+  end-to-end (both branches, sign handling) against `mpmath`'s own
+  `asin` — not reused from the Remez fit itself — across 50000+ random
+  samples plus the `x=0.5` branch boundary and `x->+-1` edge cases:
+  worst case ~0.13 ULP.
+
+  The existing bench vectors turned out to only ever exercise the
+  `|x|>=0.5` branch (`0.71`/`0.72` and the `+-1`/`0`/out-of-domain/Inf
+  special cases) — caught before shipping, not after: added one
+  `|x|<0.5` vector each (`0.3`/`-0.3`) for both `fasin`/`facos` so the
+  other branch actually gets tested too.
+
+  **Measured**: `fasin` (`|x|>=0.5` branch) 55518→**30613** (-45%
+  overall, another ~31% past just inheriting `fatan`'s own win), plus
+  a new `|x|<0.5` branch vector at **15609**; `facos` 54925→**30475**
+  (-45%), plus new `|x|<0.5` vectors at **15910**/**15914**. Every
+  vector — including the two new ones — `MATCH`es bit-exactly; no
   regressions elsewhere (only the already-explained, non-bug
   `fcosh(9.43)` case persists).
 
