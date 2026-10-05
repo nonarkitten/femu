@@ -435,9 +435,31 @@ family (see `README.md`'s `#13` row for the full writeup):
   26570->20895 (-21%), `fsincos` 21793->16090 (-26%). Every vector
   still bit-exact; no regressions elsewhere.
 
-Next up in this row: the rest of the `#10` family (`fatan`/`fasin`/
-`facos`, `fetox`/`flogn` and everything derived from them) hasn't been
-looked at for either approach yet.
+`fatan` also got the minimax treatment, with a bigger relative win
+than sin/cos: 13 terms replace the original 25-term Gregory series
+(almost half), because that series only decays geometrically (no
+factorial), leaving minimax far more room to work with than it had
+for sin/cos's 11->8. Same reduction pipeline, same Horner shape, only
+the table and iteration count changed. Verified end-to-end (30000+
+random |x| up to 1e6 plus boundary cases) against an exact Decimal
+reference: ~0.003 ULP, comfortable margin. Measured: `fatan` (no-
+reduction) 24081->13011 (-46%), (half-angle) 30876->19482 (-37%),
+(reciprocal) 35671->24328 (-32%). `fasin`/`facos` -- still chaining
+through `fatan` for now -- inherited the win for free: `fasin`
+55518->44261 (-20%), `facos` 54925->43941 (-20%). Every vector still
+bit-exact; no regressions elsewhere.
+
+Next up in this row: give `fasin`/`facos` their own standalone
+minimax, removing the `fatan`+`fsqrt` chain entirely (per the user's
+explicit "no derivations" direction -- asin has a sqrt-type
+singularity at x=+-1 that a single polynomial can't cover, so this
+needs the standard fdlibm-style split: a direct minimax for `|x|<0.5`,
+and `asin(x)=pi/2-2*asin(sqrt((1-|x|)/2))`-style reduction using
+`NativeFsqrt` as a plain arithmetic primitive -- not a second
+transcendental chain -- for `|x|>=0.5`). Then `fetox`/`flogn` and
+everything still derived from them (`fsinh`/`fcosh`/`ftanh`,
+`ftwotox`/`ftentox`, `flog2`/`flog10`) haven't been looked at for
+either approach yet.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed
