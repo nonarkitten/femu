@@ -482,9 +482,37 @@ regressions elsewhere. `fsinh`/`fcosh`/`ftanh`/`ftwotox`/`ftentox`/
 `flog2`/`flog10` all still derive from `NativeFexp`/`NativeFlogn` and
 inherited the speedup for free.
 
-Next up in this row: give each of `fsinh`/`fcosh`/`ftanh`/`ftwotox`/
-`ftentox`/`flog2`/`flog10` its own standalone minimax, same treatment
-`fasin`/`facos` already got -- none of them have been de-derived yet.
+`fsinh`/`fcosh`/`ftanh` are also done now (see `README.md`'s `#13` row
+for the full writeup) -- all three used to call `NativeFexp` TWICE
+(e^x and e^-x separately), exactly the "chain the expensive kernel
+twice" pattern this row exists to cut. `fsinh`/`fcosh` now get e^-x
+via a single `NativeFdiv` reciprocal (~5300-5800 cycles vs
+NativeFexp's ~13000) instead of a second full NativeFexp call, same
+move fasin/facos made with NativeFsqrt. `ftanh` does better still:
+`(e^x-e^-x)/(e^x+e^-x) = (e^(2x)-1)/(e^(2x)+1)`, one NativeFexp call
+(of 2x, a free exponent bump) and no extra division-shaped step at
+all. Added an explicit |x|>30 saturation guard to ftanh.asm since
+e^(2x) overflows around |x|~5678 (half of e^x's own ~11356) -- a
+regression risk the old two-call version never had; verified in
+Python that tanh(30) already rounds to exactly 1.0 at this format's
+precision, so the guard changes nothing observable.
+
+Found and fixed a real, separate bug while verifying all this: the
+bench harness's vector buffers were still capped at 128 (bumped there
+once before, for the exact same reason) while vectors/ops.txt had
+quietly grown to 150 real rows -- the last 22 were being silently
+dropped, including several of fsinh/fcosh/ftanh's own Inf/-Inf
+vectors, which had never actually run despite the suite reporting
+all-MATCH. Bumped to 256. Measured: fsinh 26720-26906->18622-18677
+(~-30%), fcosh 26880-27042->18651-18862 (~-30%), ftanh
+31967->19148 (-40%, plus 3 more vectors now actually running for the
+first time). Every vector bit-exact; no regressions elsewhere.
+
+Next up in this row: `ftwotox`/`ftentox`/`flog2`/`flog10` still
+derive from `NativeFexp`/`NativeFlogn`, but unlike fsinh/fcosh/ftanh
+each already only makes ONE call to the shared kernel plus one cheap
+multiply -- the same shape facos's own glue uses -- so it's not
+obvious there's further chaining left to cut there.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed
