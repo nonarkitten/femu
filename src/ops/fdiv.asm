@@ -517,6 +517,275 @@ endm
 
 
 ;
+; Relaxed-precision internal format (checklist #12): effective 32-bit
+; mantissa, gated by MANTISSA32 -- see FE_FADD_32's header comment in
+; fadd.asm for the full "round every operand first, every call" design.
+; This is the row's single biggest win: the restoring-division loop runs
+; 32 iterations instead of DIV64's 64 (plus the same one phantom round-
+; bit iteration FE_FDIV already pays), directly halving the loop that
+; dominates this op's cost, with a single register standing in for each
+; of DIV64's register pairs since there's no low word left once the
+; operands are rounded to 32 bits. Verified in Python (restoring
+; division + phantom round bit against exact Fraction arithmetic, 50000
+; random cases, 0 mismatches) before writing this -- including the
+; lead-bit case, where the earlier draft of this exact routine first
+; dropped the implicit 33rd bit the pre-normalize subtraction proves is
+; there, caught by that same verification.
+;
+; d0 - destination sign(1):exponent(15):reserved(16) -> combined result
+;      exponent (pure exponent, no sign -- sign lives in DivSign)
+; d1 - destination mantissa hi32 -> rounded 32-bit dst mantissa -> R
+;      (dividend/remainder) through the division loop -> final remainder
+;      (sticky source)
+; d2 - destination mantissa lo32 -> round/sticky source for the dst
+;      rounding step, then unused
+; d3 - source sign(1):exponent(15):reserved(16) -> scratch (exponent
+;      extraction) -> round-up scratch -> lead flag (briefly) -> Q
+;      (quotient accumulator through the loop) -> result mantissa
+; d4 - source mantissa hi32 -> rounded 32-bit src mantissa -> V (divisor)
+; d5 - source mantissa lo32 -> round/sticky source for the src rounding
+;      step, then unused -> sticky flag for the final round
+; d6 - scratch (fast-path probe, Inf/NaN/zero probe, sign xor) -> round-
+;      up scratch -> loop counter (dbra) -> round-bit scratch
+; d7 - reserved
+;
+	ifd MANTISSA32
+FE_FDIV_32 macro
+
+	; Fast path / special-case ladder -- identical to FE_FDIV's
+	bfextu			d0{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.N32SpecialCase
+	bfextu			d3{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.N32SpecialCase
+	bra.w			.N32MainBody
+
+	.N32SpecialCase:
+	bfextu			d0{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.N32DstExpOk
+	bra.w			.N32Done
+	.N32DstExpOk:
+	bfextu			d3{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.N32SrcExpOk
+	move.l			d3,d0
+	move.l			d4,d1
+	move.l			d5,d2
+	bra.w			.N32Done
+	.N32SrcExpOk:
+
+	bfextu			d0{1:15},d6
+	bne.s			.N32DstExpNoZ
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	moveq			#0,d1
+	moveq			#0,d2
+	move.l			d6,d0
+	bra.w			.N32Done
+	.N32DstExpNoZ:
+
+	bfextu			d3{1:15},d6
+	bne.s			.N32SrcExpNoZ
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	or.l			#$7fff0000,d6
+	move.l			#$80000000,d1
+	moveq			#0,d2
+	move.l			d6,d0
+	bra.w			.N32Done
+	.N32SrcExpNoZ:
+
+	.N32MainBody:
+	; Sign, then combined (biased) exponent -- same order as FE_FDIV:
+	; this must happen BEFORE the dst/src rounding below, since that
+	; rounding's overflow case adjusts d0 with a plain addq.w/subq.w,
+	; which only lands on the right bits once d0 holds the pure
+	; (already-extracted) exponent rather than the raw word0.
+	move.l			d0,d6
+	eor.l			d3,d6
+	and.l			#$80000000,d6
+	move.l			d6,DivSign
+	bfextu			d0{1:15},d0
+	bfextu			d3{1:15},d3
+	sub.w			d3,d0
+	add.w			#16383,d0
+
+	; Round dst mantissa (d1:d2 -> d1) and src mantissa (d4:d5 -> d4) to
+	; 32 bits -- see FE_FADD_32 for why d2/d5 are already exactly the
+	; round+sticky bits a 64->32 round needs
+	tst.l			d2
+	beq.s			.N32DstNoRound
+	btst			#31,d2
+	beq.s			.N32DstNoRound
+	move.l			d2,d6
+	and.l			#$7fffffff,d6
+	bne.s			.N32DstRoundUp
+	btst			#0,d1
+	beq.s			.N32DstNoRound
+	.N32DstRoundUp:
+	addq.l			#1,d1
+	bcc.s			.N32DstNoRound
+	move.l			#$80000000,d1
+	addq.w			#1,d0
+	.N32DstNoRound:
+
+	tst.l			d5
+	beq.s			.N32SrcNoRound
+	btst			#31,d5
+	beq.s			.N32SrcNoRound
+	move.l			d5,d6
+	and.l			#$7fffffff,d6
+	bne.s			.N32SrcRoundUp
+	btst			#0,d4
+	beq.s			.N32SrcNoRound
+	.N32SrcRoundUp:
+	addq.l			#1,d4
+	bcc.s			.N32SrcNoRound
+	move.l			#$80000000,d4
+	subq.w			#1,d0
+	.N32SrcNoRound:
+
+	; Pre-normalize: try R-V once (dividend isn't guaranteed to be below
+	; the divisor -- R/V ranges over (0.5,2)) -- see FE_FDIV's own
+	; MainBody for the same step at 64 bits.
+	cmp.l			d4,d1
+	blo.s			.N32Lead0
+	sub.l			d4,d1
+	moveq			#1,d3
+	bra.s			.N32LeadDone
+	.N32Lead0:
+	moveq			#0,d3
+	.N32LeadDone:
+	move.b			d3,DivLead
+
+	; Divide the (now pre-normalized) 32-bit mantissas: exactly 32
+	; iterations, half of DIV64's 64 -- the whole point of this row.
+	; Same per-iteration overflow handling as DIV64 (see its header
+	; comment): if R<<1 loses a real bit off the top (carry set), the
+	; true remainder is unconditionally >= V, so that iteration's
+	; quotient bit is 1 without needing to test it, and R-V computed via
+	; plain wraparound subtraction already lands on the exact remainder.
+	moveq			#0,d3
+	moveq			#31,d6
+	.N32DivLoop:
+	lsl.l			#1,d1
+	bcs.s			.N32DivOverflowed
+	cmp.l			d4,d1
+	blo.s			.N32DivBit0
+	sub.l			d4,d1
+	lsl.l			#1,d3
+	addq.l			#1,d3
+	bra.s			.N32DivNext
+	.N32DivBit0:
+	lsl.l			#1,d3
+	bra.s			.N32DivNext
+	.N32DivOverflowed:
+	sub.l			d4,d1
+	lsl.l			#1,d3
+	addq.l			#1,d3
+	.N32DivNext:
+	dbra			d6,.N32DivLoop
+
+	; One more (non-accumulating) iteration to get the round bit and the
+	; true remainder used for sticky, without touching Q (d3) -- same
+	; role as FE_FDIV's own phantom step.
+	lsl.l			#1,d1
+	bcs.s			.N32PhantomOverflowed
+	cmp.l			d4,d1
+	blo.s			.N32PhantomBit0
+	sub.l			d4,d1
+	move.b			#1,DivRound
+	bra.s			.N32PhantomDone
+	.N32PhantomBit0:
+	move.b			#0,DivRound
+	bra.s			.N32PhantomDone
+	.N32PhantomOverflowed:
+	sub.l			d4,d1
+	move.b			#1,DivRound
+	.N32PhantomDone:
+
+	; d4 (the divisor) is free from here on. Two fixed cases based on
+	; the pre-normalize leading bit, mirroring FE_FDIV's own Lead0Case/
+	; Lead1Case split.
+	tst.b			DivLead
+	bne.s			.N32Lead1Case
+
+	.N32Lead0Case:
+	subq.w			#1,d0
+	tst.l			d1
+	beq.s			.N32L0NoSticky
+	moveq			#1,d5
+	bra.s			.N32L0StickyDone
+	.N32L0NoSticky:
+	moveq			#0,d5
+	.N32L0StickyDone:
+	moveq			#0,d6
+	move.b			DivRound,d6
+	bra.w			.N32Round2
+
+	.N32Lead1Case:
+	tst.l			d1
+	bne.s			.N32L1Sticky
+	tst.b			DivRound
+	beq.s			.N32L1NoSticky
+	.N32L1Sticky:
+	moveq			#1,d5
+	bra.s			.N32L1StickyDone
+	.N32L1NoSticky:
+	moveq			#0,d5
+	.N32L1StickyDone:
+	; Q (d3) conceptually gained a 33rd bit above its own top from the
+	; pre-normalize subtraction succeeding -- insert it as the new
+	; explicit top bit and shift the rest down by 1, which ejects Q's
+	; own bit0 as the new round bit; the old round bit folds into
+	; sticky. One register's worth of this, where FE_FDIV's own
+	; Lead1Case needs a two-register roxr chain (its Q spans d3:d6).
+	moveq			#1,d6
+	and.l			d3,d6
+	lsr.l			#1,d3
+	bset			#31,d3
+	tst.b			DivRound
+	beq.s			.N32Round2
+	moveq			#1,d5
+
+	; Round to nearest, ties to even: d6 = round bit, d5 = sticky
+	.N32Round2:
+	tst.l			d6
+	beq.s			.N32NoRoundUp
+	tst.l			d5
+	bne.s			.N32RoundUp
+	btst			#0,d3
+	beq.s			.N32NoRoundUp
+	.N32RoundUp:
+	addq.l			#1,d3
+	bcc.s			.N32NoRoundUp
+	; mantissa overflowed past 32 bits (was all-ones): renormalize
+	move.l			#$80000000,d3
+	addq.w			#1,d0
+	.N32NoRoundUp:
+
+	; Construct result word0 (see FE_FDIV for why the shift alone is
+	; enough), and force the low mantissa word flat per #12's contract
+	lsl.l			#8,d0
+	lsl.l			#8,d0
+	move.l			DivSign,d6
+	or.l			d6,d0
+	move.l			d3,d1
+	moveq			#0,d2
+
+	.N32Done:
+
+endm
+	endif
+
+
+;
 ;
 ;
 FDIVHANDLER macro
@@ -542,6 +811,8 @@ FDIVHANDLER macro
 	; no runtime check needed. Plain fdiv/fddiv instead honor FPCR's
 	; rounding precision field (checklist #5), same dispatch shape as
 	; FMULHANDLER.
+	; Checklist #12: same MANTISSA32 swap as FMULHANDLER -- only the
+	; "FPCR didn't ask for single" branch changes.
 	ifnb \1
 		FE_FDIV_SINGLE
 	else
@@ -549,7 +820,11 @@ FDIVHANDLER macro
 		andi.b			#FPCR_PRECMASK,d6
 		cmp.b			#FPCR_SINGLE,d6
 		beq.w			.UseSingle
-		FE_FDIV
+		ifd MANTISSA32
+			FE_FDIV_32
+		else
+			FE_FDIV
+		endif
 		bra.w			.DivDone
 		.UseSingle:
 		FE_FDIV_SINGLE

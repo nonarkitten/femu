@@ -344,3 +344,10 @@ fmove.l d0,fp0                  905      MATCH  got 123456 (want 123456) (stub)
 === fsincos dual-register-write probe (checklist #10) ===
 op                               cycles       ok  note
 fsincos.x fp0,fp2:fp1             16090       ok  sin got 0.68163876002333412 (want 0.68163876002333412), cos got 0.7316888688738209 (want 0.7316888688738209)
+
+=== fadd/fsub/fmul/fdiv relaxed-precision probe (checklist #12) ===
+op                                     cycles      match  note
+fadd.x fp1,fp0                            970      MATCH  19134.75 vs 19134.75
+fsub.x fp1,fp0                            963      MATCH  5556.25 vs 5556.25
+fmul.x fp1,fp0                            922      MATCH  12884901884 vs 12884901884
+fdiv.x fp1,fp0                           1949      MATCH  2.3333333330228925 vs 2.3333333330228925

@@ -22,9 +22,14 @@ FSUBHANDLER macro
 	MOVEFPNTODN		d6,d0,d1,d2
 
 	; Emulate instruction (flip the source's sign bit, still bit31 of
-	; its word0, then reuse FE_FADD as a-b = a+(-b))
+	; its word0, then reuse FE_FADD as a-b = a+(-b)). Checklist #12:
+	; same MANTISSA32 swap as FADDHANDLER, for the same reason.
 	bchg			#31,d3
-	FE_FADD
+	ifd MANTISSA32
+		FE_FADD_32
+	else
+		FE_FADD
+	endif
 
 	; Write results
 	GETREGISTER		d6

@@ -525,9 +525,24 @@ circular family, measured 2-3x slower, and reverted (kept,
 unreferenced, in `src/utils/cordic.asm`) -- minimax carried the row
 instead.
 
-`#12` (relaxed-precision internal format) is the only row left on
-the checklist, deliberately skipped earlier this session as "a
-broader change" -- fair game whenever it's picked up.
+`#12` (relaxed-precision internal format) is done too: a new
+`MANTISSA32` build switch (`vasm -D MANTISSA32`, same convention as
+`CPU020`/`NOMATHLIB`) rounds every `fadd`/`fsub`/`fmul`/`fdiv` operand
+to a 32-bit mantissa before computing, sitting alongside `#4`'s 64-bit
+default rather than replacing it. Measured: `fdiv` ~63% faster (2.7x --
+`DIV64`'s 64-iteration loop halved to 32), `fmul` ~21% faster (one
+`mulu.l` instead of `MUL64`'s four), `fadd`/`fsub` only marginally
+faster (the mandatory per-operand rounding step gives back most of what
+the narrower align/normalize path saves). See `README.md` row `#12` for
+the full design and numbers.
+
+**Every row on the checklist is now done, not-viable-as-scoped, or
+checked-and-confirmed-unnecessary.** Next up (explicitly requested by
+the user once `#12` landed): tag this state, close out the now-stale
+`perf/*` branches, make sure every row's work is actually merged into
+`master`, and rewrite `README.md`/`NEXT.md` away from the in-progress
+checklist narrative into a plain, current-state description of what
+femu actually is now.
 
 **Before assuming something's a bug: check for concurrent work.** More
 than once, a checklist row turned out to already be done on a pushed

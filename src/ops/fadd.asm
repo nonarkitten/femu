@@ -173,6 +173,241 @@ endm
 
 
 ;
+; Relaxed-precision internal format (checklist #12): effective 32-bit
+; mantissa instead of the full 64-bit one FE_FADD above uses. Gated by
+; MANTISSA32 -- a build-time choice (vasm -D MANTISSA32), never silently
+; on; the default build is still full 64-bit ("science work" precision).
+; Keeps #4's 80-bit (RegFpn) storage layout exactly as-is -- only the
+; SIGNIFICANT width of the mantissa narrows, by rounding every operand
+; down to 32 bits (round to nearest, ties to even) before combining, and
+; forcing every result's low mantissa word (d2) to 0. That rounding runs
+; on every operand on every call (not just once at some boundary), so
+; this is correct regardless of what a value's low 32 mantissa bits
+; already contain -- the same "round first" relaxation #5's single-
+; precision fast path already uses (FE_FMUL_SINGLE/FE_FDIV_SINGLE in
+; fmul.asm/fdiv.asm), just at a different width (32 instead of 24 bits)
+; and applied to every fadd/fsub call under this build, not only ones
+; FPCR/the opcode explicitly marks single. Verified in Python (the
+; align/combine/normalize structure directly against FE_FADD's own
+; 64-bit algorithm, operand rounding against exact Fraction arithmetic,
+; 50000 random cases, 0 mismatches) before writing this.
+;
+; d0 - destination sign(1):exponent(15):reserved(16) -> working exponent
+;      -> result sign+exponent
+; d1 - destination mantissa hi32 -> rounded 32-bit dst mantissa -> result
+;      mantissa (d2 is always written back 0 in this mode)
+; d2 - destination mantissa lo32 -> round/sticky source for the dst
+;      rounding step, then unused
+; d3 - source sign(1):exponent(15):reserved(16) -> working exponent
+; d4 - source mantissa hi32 -> rounded 32-bit src mantissa
+; d5 - source mantissa lo32 -> round/sticky source for the src rounding
+;      step, then unused
+; d6 - scratch
+; d7 - reserved
+;
+	ifd MANTISSA32
+FE_FADD_32 macro
+
+	; Fast path / special-case ladder -- identical to FE_FADD's, width-
+	; independent (see there for the reasoning)
+	bfextu			d0{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.N32SpecialCase
+	bfextu			d3{1:15},d6
+	subq.w			#1,d6
+	cmp.w			#32766,d6
+	bhs.s			.N32SpecialCase
+	bra.w			.N32MainBody
+
+	.N32SpecialCase:
+	bfextu			d0{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.N32DstExpOk
+	bra.w			.N32Done
+	.N32DstExpOk:
+	bfextu			d3{1:15},d6
+	cmp.w			#$7fff,d6
+	bne.s			.N32SrcExpOk
+	move.l			d3,d0
+	move.l			d4,d1
+	move.l			d5,d2
+	bra.w			.N32Done
+	.N32SrcExpOk:
+
+	bfextu			d0{1:15},d6
+	bne.s			.N32DstExpNoZ
+	move.l			d3,d0
+	move.l			d4,d1
+	move.l			d5,d2
+	bra.w			.N32Done
+	.N32DstExpNoZ:
+	bfextu			d3{1:15},d6
+	beq.w			.N32Done
+
+	.N32MainBody:
+	; Build working sign+exponent registers -- see FE_FADD's MainBody
+	bfextu			d0{0:1},d6
+	bfextu			d0{1:15},d0
+	bfins			d6,d0{0:1}
+	bfextu			d3{0:1},d6
+	bfextu			d3{1:15},d3
+	bfins			d6,d3{0:1}
+
+	; Round dst mantissa (d1:d2, 64 bits) down to a 32-bit value in d1:
+	; d2 is already exactly what a 64->32 round needs as round+sticky
+	; (bit31 = round bit, bits30-0 = sticky) with no shifting at all --
+	; unlike FE_FMUL_SINGLE's 64->24 round, 32 lands exactly on a
+	; register boundary.
+	tst.l			d2
+	beq.s			.N32DstNoRound
+	btst			#31,d2
+	beq.s			.N32DstNoRound
+	move.l			d2,d6
+	and.l			#$7fffffff,d6
+	bne.s			.N32DstRoundUp
+	btst			#0,d1
+	beq.s			.N32DstNoRound
+	.N32DstRoundUp:
+	addq.l			#1,d1
+	bcc.s			.N32DstNoRound
+	; mantissa overflowed past 32 bits (was all-ones): renormalize
+	move.l			#$80000000,d1
+	addq.w			#1,d0
+	.N32DstNoRound:
+
+	; Same for the source mantissa (d4:d5 -> d4)
+	tst.l			d5
+	beq.s			.N32SrcNoRound
+	btst			#31,d5
+	beq.s			.N32SrcNoRound
+	move.l			d5,d6
+	and.l			#$7fffffff,d6
+	bne.s			.N32SrcRoundUp
+	btst			#0,d4
+	beq.s			.N32SrcNoRound
+	.N32SrcRoundUp:
+	addq.l			#1,d4
+	bcc.s			.N32SrcNoRound
+	move.l			#$80000000,d4
+	addq.w			#1,d3
+	.N32SrcNoRound:
+
+	; Align exponents -- single-register shift of whichever mantissa has
+	; the smaller exponent (same roles as ALIGNEXPONENT's \1,\2,\4,\5,
+	; just without a \3/\6 low word to carry along)
+	cmp.w			d0,d3
+	beq.s			.N32ExpOk
+	bmi.s			.N32ExpNeg
+
+	.N32ExpPos:
+	; d3 (src exp) >= d0 (dst exp): shift the dst mantissa (d1) right
+	sub.w			d0,d3
+	add.w			d3,d0
+	cmp.w			#32,d3
+	blt.s			.N32ExpPosShift
+	moveq			#0,d1
+	bra.s			.N32ExpOk
+	.N32ExpPosShift:
+	lsr.l			d3,d1
+	bra.s			.N32ExpOk
+
+	.N32ExpNeg:
+	; d3 (src exp) < d0 (dst exp): shift the src mantissa (d4) right
+	sub.w			d0,d3
+	neg.w			d3
+	cmp.w			#32,d3
+	blt.s			.N32ExpNegShift
+	moveq			#0,d4
+	bra.s			.N32ExpOk
+	.N32ExpNegShift:
+	lsr.l			d3,d4
+
+	.N32ExpOk:
+	move.w			d0,d3
+
+	; Combine (mantissas already explicit-bit, no bset needed)
+	move.l			d0,d6
+	eor.l			d3,d6
+	btst			#31,d6
+	bne.w			.N32DiffSigns
+
+	.N32SameSign:
+	add.l			d4,d1
+	bcc.s			.N32SameSignNoCarry
+	roxr.l			#1,d1
+	addq.w			#1,d0
+	.N32SameSignNoCarry:
+	move.l			d0,d6
+	and.l			#$80000000,d6
+	bra.w			.N32Combined
+
+	.N32DiffSigns:
+	cmp.l			d1,d4
+	bhi.s			.N32SrcLarger
+	blo.s			.N32DstLarger
+
+	; Exactly equal magnitudes, opposite signs: result is +0
+	moveq			#0,d1
+	moveq			#0,d6
+	bra.w			.N32Combined
+
+	.N32SrcLarger:
+	sub.l			d1,d4
+	move.l			d4,d1
+	move.l			d3,d6
+	and.l			#$80000000,d6
+	bra.s			.N32Combined
+
+	.N32DstLarger:
+	sub.l			d4,d1
+	move.l			d0,d6
+	and.l			#$80000000,d6
+
+	.N32Combined:
+	; Normalize -- single-word version of NORMALIZE: no LowNormalize
+	; fallback (there's only one word), and no HighNormalizeRight branch
+	; (NORMALIZE's own comment already notes that one's unreachable --
+	; bfffo can't return negative, so it's dead code there too).
+	bfffo			d1{0:32},d4
+	bne.s			.N32HighNormalize
+
+	move.w			#0,d0
+	moveq			#0,d1
+	bra.s			.N32NormalizeOk
+
+	.N32HighNormalize:
+	cmp.b			#0,d4
+	beq.s			.N32NormalizeOk
+	sub.w			d4,d0
+	lsl.l			d4,d1
+
+	.N32NormalizeOk:
+	tst.w			d0
+	bgt.s			.N32NoUnderflow
+	move.w			#0,d0
+	moveq			#0,d1
+	.N32NoUnderflow:
+	cmp.w			#32767,d0
+	blt.s			.N32NoOverflow
+	move.w			#$7fff,d0
+	move.l			#$80000000,d1
+	.N32NoOverflow:
+
+	; Construct result word0 (see FE_FADD for why the shift alone is
+	; enough), and force the low mantissa word flat per #12's contract
+	moveq			#0,d2
+	lsl.l			#8,d0
+	lsl.l			#8,d0
+	or.l			d6,d0
+
+	.N32Done:
+
+endm
+	endif
+
+
+;
 ;
 ;
 FADDHANDLER macro
@@ -199,8 +434,14 @@ FADDHANDLER macro
 	GETREGISTER		d6
 	MOVEFPNTODN		d6,d0,d1,d2
 
-	; Emulate instruction
-	FE_FADD
+	; Emulate instruction. Checklist #12: fadd has no FPCR-single check to
+	; preserve (row 5 only covers fmul/fdiv -- see FMULHANDLER), so under
+	; MANTISSA32 the narrowed path is simply the only path.
+	ifd MANTISSA32
+		FE_FADD_32
+	else
+		FE_FADD
+	endif
 
 	; Write results
 	GETREGISTER		d6

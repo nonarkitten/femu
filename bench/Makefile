@@ -27,7 +27,7 @@ ASMFLAGSMOT  = -Fbin
 FEMU_SRCS := $(shell find $(SRC) -name '*.asm')
 
 .PHONY: all run clean vasm-tool
-all: $(BUILD)/femu-bench $(BUILD)/femu020.bin $(BUILD)/femu020m.bin $(BUILD)/ops.bin $(BUILD)/fmove_probe.bin $(BUILD)/fsmul_probe.bin $(BUILD)/ea_fastpath_probe.bin $(BUILD)/chain_probe.bin $(BUILD)/fsincos_probe.bin
+all: $(BUILD)/femu-bench $(BUILD)/femu020.bin $(BUILD)/femu020m.bin $(BUILD)/femu020m32.bin $(BUILD)/ops.bin $(BUILD)/fmove_probe.bin $(BUILD)/fsmul_probe.bin $(BUILD)/ea_fastpath_probe.bin $(BUILD)/chain_probe.bin $(BUILD)/fsincos_probe.bin $(BUILD)/mantissa32_probe.bin
 
 run: all
 	cd $(CURDIR) && ./$(BUILD)/femu-bench
@@ -52,6 +52,10 @@ $(BUILD)/femu020.bin: src/bench_wrapper.asm $(FEMU_SRCS) $(VASM)
 $(BUILD)/femu020m.bin: src/bench_wrapper.asm $(FEMU_SRCS) $(VASM)
 	$(VASM) $(ASMFLAGSMOT) $(ASMFLAGS020) -DNOMATHLIB -o $@ src/bench_wrapper.asm
 
+# checklist #12: relaxed-precision (32-bit effective mantissa) build
+$(BUILD)/femu020m32.bin: src/bench_wrapper.asm $(FEMU_SRCS) $(VASM)
+	$(VASM) $(ASMFLAGSMOT) $(ASMFLAGS020) -DNOMATHLIB -DMANTISSA32 -o $@ src/bench_wrapper.asm
+
 # --- the test opcodes, assembled with real FPU mnemonics ----------------
 $(BUILD)/ops.bin: src/ops.asm $(VASM)
 	$(VASM) $(ASMFLAGSMOT) -m68020 -m68881 -o $@ src/ops.asm
@@ -74,6 +78,9 @@ $(BUILD)/ea_fastpath_probe.bin: src/ea_fastpath_probe.asm $(VASM)
 
 $(BUILD)/fsincos_probe.bin: src/fsincos_probe.asm $(VASM)
 	$(VASM) $(ASMFLAGSMOT) -m68020 -m68881 -o $@ src/fsincos_probe.asm
+
+$(BUILD)/mantissa32_probe.bin: src/mantissa32_probe.asm $(VASM)
+	$(VASM) $(ASMFLAGSMOT) -m68020 -m68881 -o $@ src/mantissa32_probe.asm
 
 # --- Musashi: generate its opcode tables, then compile the core ---------
 $(BUILD)/m68kmake: $(MUSASHI_DIR)/m68kmake.c
