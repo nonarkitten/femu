@@ -1175,18 +1175,23 @@ NativeFatan
 	move.l			d1,AtanT+4
 	move.l			d2,AtanT+8
 
-	; Horner evaluation: result = C24; for n=23 downto 0,
+	; Horner evaluation: result = C12; for n=11 downto 0,
 	; result := result*t + Cn. Same address-increment trick as
 	; NativeFexp's own Horner loop (see there for why the constants are
 	; declared highest-term-first in source, lowest-address-first in
-	; memory).
-	lea.l			AtanC24,a0
+	; memory). 13-term minimax (checklist #13, Remez exchange in
+	; Python), not the original 25-term Taylor/Gregory series -- see
+	; this file's own AtanC12 comment below for the writeup. Almost
+	; half the terms: the Gregory series decays only geometrically (no
+	; factorial), so minimax has far more room to improve on it than
+	; it did for #13's sin/cos row (11->8 terms there, 25->13 here).
+	lea.l			AtanC12,a0
 	movem.l			(a0),d0/d1/d2
 	move.l			d0,AtanResult
 	move.l			d1,AtanResult+4
 	move.l			d2,AtanResult+8
-	lea.l			AtanC23,a0
-	move.l			#23,AtanIterCount
+	lea.l			AtanC11,a0
+	move.l			#11,AtanIterCount
 	.HornerLoop:
 	move.l			AtanResult,d0
 	move.l			AtanResult+4,d1
@@ -1269,31 +1274,31 @@ AtanNum			dc.l	0,0,0
 AtanT			dc.l	0,0,0
 AtanResult		dc.l	0,0,0
 AtanIterCount		dc.l	0
-AtanC24		dc.l	$3ff90000,$a72f0539,$7829cbc1	; +1/49
-AtanC23		dc.l	$bff90000,$ae4c415c,$9882b931	; -1/47
-AtanC22		dc.l	$3ff90000,$b60b60b6,$0b60b60b	; +1/45
-AtanC21		dc.l	$bff90000,$be82fa0b,$e82fa0bf	; -1/43
-AtanC20		dc.l	$3ff90000,$c7ce0c7c,$e0c7ce0c	; +1/41
-AtanC19		dc.l	$bff90000,$d20d20d2,$0d20d20d	; -1/39
-AtanC18		dc.l	$3ff90000,$dd67c8a6,$0dd67c8a	; +1/37
-AtanC17		dc.l	$bff90000,$ea0ea0ea,$0ea0ea0f	; -1/35
-AtanC16		dc.l	$3ff90000,$f83e0f83,$e0f83e10	; +1/33
-AtanC15		dc.l	$bffa0000,$84210842,$10842108	; -1/31
-AtanC14		dc.l	$3ffa0000,$8d3dcb08,$d3dcb08d	; +1/29
-AtanC13		dc.l	$bffa0000,$97b425ed,$097b425f	; -1/27
-AtanC12		dc.l	$3ffa0000,$a3d70a3d,$70a3d70a	; +1/25
-AtanC11		dc.l	$bffa0000,$b21642c8,$590b2164	; -1/23
-AtanC10		dc.l	$3ffa0000,$c30c30c3,$0c30c30c	; +1/21
-AtanC9		dc.l	$bffa0000,$d79435e5,$0d79435e	; -1/19
-AtanC8		dc.l	$3ffa0000,$f0f0f0f0,$f0f0f0f1	; +1/17
-AtanC7		dc.l	$bffb0000,$88888888,$88888889	; -1/15
-AtanC6		dc.l	$3ffb0000,$9d89d89d,$89d89d8a	; +1/13
-AtanC5		dc.l	$bffb0000,$ba2e8ba2,$e8ba2e8c	; -1/11
-AtanC4		dc.l	$3ffb0000,$e38e38e3,$8e38e38e	; +1/9
-AtanC3		dc.l	$bffc0000,$92492492,$49249249	; -1/7
-AtanC2		dc.l	$3ffc0000,$cccccccc,$cccccccd	; +1/5
-AtanC1		dc.l	$bffd0000,$aaaaaaaa,$aaaaaaab	; -1/3
-AtanC0		dc.l	$3fff0000,$80000000,$00000000	; +1/1
+; 13-term minimax (checklist #13, Remez exchange in Python against an
+; exact-Decimal reference, 60+ digit precision) replaces the original
+; 25-term Gregory/Taylor series -- same reduced range (t=x^2, x in
+; [0,tan(pi/8)]) the reciprocal/half-angle reduction above already
+; produces, same Horner-loop shape. Verified end-to-end (full
+; reduction pipeline, 30000+ random |x| up to 1e6 plus 0/1/huge/tiny
+; boundary cases) against dec_atan at 90 digits: worst case ~0.003 ULP
+; of this format's 64-bit mantissa -- comfortably inside the margin
+; #10's own 25-term series used, with far more room to spare than
+; sin/cos's 8-term minimax had, because the Gregory series' lack of a
+; factorial in its denominator gives minimax much more slack to work
+; with here.
+AtanC12		dc.l	$3ff80000,$f84b3df1,$a908187b	; +minimax c12
+AtanC11		dc.l	$bffa0000,$88edd8d7,$18cea276	; -minimax c11
+AtanC10		dc.l	$3ffa0000,$b86098f0,$69d464ca	; +minimax c10
+AtanC9		dc.l	$bffa0000,$d5b8a4e6,$fee157aa	; -minimax c9
+AtanC8		dc.l	$3ffa0000,$f0b7eaf7,$f6dcfb53	; +minimax c8
+AtanC7		dc.l	$bffb0000,$88862901,$1bfe717c	; -minimax c7
+AtanC6		dc.l	$3ffb0000,$9d89b5c6,$6031cc92	; +minimax c6
+AtanC5		dc.l	$bffb0000,$ba2e8a4a,$bdd571d2	; -minimax c5
+AtanC4		dc.l	$3ffb0000,$e38e38db,$0218b978	; +minimax c4
+AtanC3		dc.l	$bffc0000,$92492492,$38f1d7fe	; -minimax c3
+AtanC2		dc.l	$3ffc0000,$cccccccc,$ccacde09	; +minimax c2
+AtanC1		dc.l	$bffd0000,$aaaaaaaa,$aaaa9e4b	; -minimax c1
+AtanC0		dc.l	$3ffe0000,$ffffffff,$ffffffff	; +minimax c0
 
 
 ;

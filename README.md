@@ -1270,13 +1270,18 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
 - **Depends on:** 10
 - **Status:** 🔲 In progress. `fsin`/`fcos`/`ftan`/`fsincos` now run an
   8-term minimax series instead of the original 11-term Taylor series
-  — a real, measured win (~21-26% faster, see below). CORDIC was tried
-  first (per this row's own original idea), measured 2-3x *slower*,
-  and reverted — kept as a documented dead end (`src/utils/cordic.asm`,
-  unreferenced by any op) rather than deleted. Still to do: the rest of
-  the `#10` family (`fatan`/`fasin`/`facos`, `fetox`/`flogn` and
-  everything derived from them) hasn't been looked at yet for either
-  approach.
+  (~21-26% faster). `fatan` now runs a 13-term minimax series instead
+  of the original 25-term Gregory series (~32-46% faster, `fasin`/
+  `facos` inheriting the improvement for free since they still chain
+  through it — see this row's own "still to do" for why that chain
+  itself hasn't been removed yet). CORDIC was tried first (per this
+  row's own original idea), measured 2-3x *slower*, and reverted —
+  kept as a documented dead end (`src/utils/cordic.asm`, unreferenced
+  by any op) rather than deleted. Still to do: give `fasin`/`facos`
+  their own standalone minimax (removing the `fatan`+`fsqrt` chain
+  entirely, per the user's explicit "no derivations" direction), and
+  look at `fetox`/`flogn` and everything still derived from them
+  (`fsinh`/`fcosh`/`ftanh`, `ftwotox`/`ftentox`, `flog2`/`flog10`).
 - **Branch:** `claude/keen-mendel-3hb6vs`
 - **Result:** Suggested by the user right after `#10` closed, having
   asked for and gotten the real chaining-cost numbers above (not a
@@ -1338,6 +1343,33 @@ started, just noted per `CLAUDE.md`'s "note them, don't fix them inline":
   faster correct answer): `fsin` 13636→**10052** (-26%), `fcos`
   21668→**15965** (-26%), `ftan` 26570→**20895** (-21%), `fsincos`
   21793→**16090** (-26%). Every vector still `MATCH`es bit-exactly; no
+  regressions elsewhere (only the already-explained, non-bug
+  `fcosh(9.43)` case persists).
+
+  **Minimax (`fatan`) — done, bigger win than sin/cos.** Same Remez-
+  exchange approach, same reduced range (`t=x^2`, `x` in
+  `[0,tan(pi/8)]`) the existing reciprocal/half-angle reduction already
+  produces, same Horner-loop shape — only the coefficient table and
+  iteration count changed. A **13-term** minimax polynomial clears the
+  same `2^-63` error target the original **25-term** Gregory series
+  needed, almost half as many terms — a much bigger relative cut than
+  sin/cos's 11→8, because the Gregory series' error only decays
+  geometrically (no factorial in its denominator), leaving minimax far
+  more room to improve on it. Verified end-to-end (full reduction
+  pipeline — reciprocal for `|x|>1`, half-angle for `|x|>tan(pi/8)`,
+  then the 13-term series, then the `+pi/4`/`pi/2-result` correction
+  steps — 30000+ random `|x|` up to `1e6` plus `0`/`1`/huge/tiny
+  boundary cases) against an exact `Decimal` reference: worst case
+  ~0.003 ULP, comfortably inside the margin the original 25-term
+  series used, with far more headroom than sin/cos's own 8-term
+  result had.
+
+  **Measured**: `fatan` (no-reduction case) 24081→**13011** (-46%),
+  (half-angle case) 30876→**19482** (-37%), (reciprocal case)
+  35671→**24328** (-32%). `fasin`/`facos` — still chaining through
+  `fatan` for now, see this row's own "still to do" — inherited the
+  win for free: `fasin` 55518→**44261** (-20%), `facos`
+  54925→**43941** (-20%). Every vector still `MATCH`es bit-exactly; no
   regressions elsewhere (only the already-explained, non-bug
   `fcosh(9.43)` case persists).
 
